@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FreeZone BD</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f4f6fa;color:#172033;font-family:system-ui,-apple-system,sans-serif}
+button,input,textarea{font:inherit}
+button{cursor:pointer}
+.top{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid #e7ebf1;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
+.brand{font-size:22px;font-weight:900}
+.user{color:#6c7688}
+.layout{max-width:1100px;margin:auto;padding:18px;display:grid;grid-template-columns:190px 1fr;gap:18px}
+.side{background:#fff;border-radius:18px;padding:10px;height:max-content;position:sticky;top:72px}
+.nav-btn{width:100%;border:0;background:transparent;text-align:left;padding:12px;border-radius:10px;margin:2px 0}
+.nav-btn:hover,.nav-btn.active{background:#edf2ff}
+.badge{float:right;background:#ef4444;color:#fff;border-radius:99px;padding:2px 7px;font-size:11px}
+.section{min-width:0}
+.card,.post,.panel{background:#fff;border:1px solid #edf0f4;border-radius:18px;padding:16px;margin-bottom:14px}
+.composer textarea{width:100%;min-height:90px;padding:12px;border:1px solid #dce2ea;border-radius:12px;resize:vertical}
+.composer input{width:100%;margin-top:8px;padding:11px;border:1px solid #dce2ea;border-radius:10px}
+.primary{border:0;background:#172033;color:#fff;padding:10px 15px;border-radius:10px;margin-top:10px}
+.post-head{display:flex;align-items:center;gap:10px}
+.avatar,.big-avatar{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:#e7ecf4;font-weight:800}
+.post-head small{display:block;color:#788294}
+.delete-post{margin-left:auto;border:0;background:transparent;font-size:22px}
+.post-text{line-height:1.65;white-space:pre-wrap}
+.post-image{width:100%;max-height:520px;object-fit:cover;border-radius:14px}
+.stats{display:flex;justify-content:space-between;color:#788294;font-size:13px;border-bottom:1px solid #edf0f4;padding:9px 0}
+.actions{display:flex;gap:5px}
+.actions button{flex:1;border:0;background:#fff;padding:10px;border-radius:9px}
+.actions button:hover{background:#f0f3f7}
+.state{text-align:center;background:#fff;border-radius:16px;padding:28px;color:#707b8d}
+.state.error{color:#b91c1c}
+.cover{height:130px;border-radius:15px 15px 0 0;background:linear-gradient(120deg,#dbeafe,#ede9fe)}
+.profile{text-align:center;padding-bottom:20px}
+.big-avatar{width:84px;height:84px;margin:-42px auto 10px;border:5px solid #fff;font-size:25px}
+.big-avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover}
+.list-row{display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:1px solid #edf0f4}
+.list-row small{display:block;color:#788294}
+.list-row button{border:0;background:#172033;color:#fff;padding:8px 12px;border-radius:9px}
+.notification{padding:13px;border-bottom:1px solid #edf0f4}
+.notification.unread{background:#eef5ff}
+.chat-grid{display:grid;grid-template-columns:220px 1fr;gap:12px}
+.chat-item{display:block;width:100%;text-align:left;border:0;background:#fff;padding:12px;border-bottom:1px solid #edf0f4}
+.chat-item small{display:block;color:#788294;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.messages{height:430px;overflow:auto;background:#f6f8fb;border-radius:14px;padding:14px}
+.bubble{max-width:75%;width:max-content;background:#fff;border-radius:14px;padding:9px 12px;margin:7px 0}
+.bubble.mine{margin-left:auto;background:#172033;color:#fff}
+.bubble p{margin:0}
+.bubble small{opacity:.65}
+.chat-compose{display:flex;gap:8px;margin-top:8px}
+.chat-compose input{flex:1;padding:12px;border:1px solid #dce2ea;border-radius:10px}
+.settings input[type=text],.settings input[type=url]{width:100%;padding:11px;border:1px solid #dce2ea;border-radius:10px;margin-top:5px}
+.settings label{display:block;padding:8px 0}
+.toast{position:fixed;right:18px;bottom:18px;z-index:50;background:#172033;color:#fff;padding:12px 16px;border-radius:12px;opacity:0;transform:translateY(10px);transition:.2s}
+.toast.show{opacity:1;transform:none}
+.toast.error{background:#b91c1c}
+.toast.success{background:#166534}
+@media(max-width:760px){
+  .layout{grid-template-columns:1fr;padding:10px}
+  .side{top:59px;display:flex;overflow:auto;z-index:10}
+  .nav-btn{white-space:nowrap;width:auto}
+  .chat-grid{grid-template-columns:1fr}
+  .chat-list{max-height:180px;overflow:auto}
+  .actions{flex-wrap:wrap}
+  .actions button{min-width:45%}
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">FreeZone BD</div>
+  <div>
+    <span id="currentUserName" class="user"></span>
+    <button id="logoutBtn">Logout</button>
+  </div>
+</header>
+
+<div class="layout">
+<aside class="side">
+  <button class="nav-btn active" data-section="home">🏠 Home</button>
+  <button class="nav-btn" data-section="profile">👤 Profile</button>
+  <button class="nav-btn" data-section="friends">👥 Friends</button>
+  <button class="nav-btn" data-section="notifications">🔔 Notifications <span id="notifBadge" class="badge"></span></button>
+  <button class="nav-btn" data-section="chat">💬 Chat</button>
+  <button class="nav-btn" data-section="settings">⚙️ Settings</button>
+</aside>
+
+<main>
+<section id="section-home" class="section">
+  <div class="card composer">
+    <h3>Create Post</h3>
+    <textarea id="postText" placeholder="What's on your mind?"></textarea>
+    <input id="postImageURL" placeholder="Image URL — optional">
+    <button id="createPostBtn" class="primary">Publish</button>
+  </div>
+  <div id="feedList"></div>
+</section>
+
+<section id="section-profile" class="section" hidden>
+  <div class="panel" id="profileView"></div>
+</section>
+
+<section id="section-friends" class="section" hidden>
+  <div class="panel" id="friendsView"></div>
+</section>
+
+<section id="section-notifications" class="section" hidden>
+  <div class="panel">
+    <h2>Notifications</h2>
+    <div id="notificationList"></div>
+  </div>
+</section>
+
+<section id="section-chat" class="section" hidden>
+  <div class="chat-grid">
+    <div class="panel" id="chatList"></div>
+    <div class="panel">
+      <h3>Chat: <span id="chatTarget">Select a friend</span></h3>
+      <div id="messages" class="messages"></div>
+      <div class="chat-compose">
+        <input id="chatText" placeholder="Message...">
+        <button id="sendChatBtn" class="primary">Send</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="section-settings" class="section" hidden>
+  <div class="panel settings">
+    <h2>Profile & Settings</h2>
+
+    <label>Name
+      <input id="profileName" type="text">
+    </label>
+
+    <label>Photo URL
+      <input id="profilePhoto" type="url">
+    </label>
+
+    <label>Bio
+      <input id="profileBio" type="text">
+    </label>
+
+    <button id="saveSettingsBtn" class="primary">Save Settings</button>
+
+    <hr>
+
+    <label><input id="profileVisible" type="checkbox"> Profile visible</label>
+    <label><input id="showOnline" type="checkbox"> Show online status</label>
+    <label><input id="allowRequests" type="checkbox"> Allow friend requests</label>
+    <label><input id="notifyEnabled" type="checkbox"> Notifications</label>
+  </div>
+</section>
+</main>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script type="module" src="./App.js"></script>
+</body>
+</html>
