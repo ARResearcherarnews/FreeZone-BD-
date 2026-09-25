@@ -45,6 +45,9 @@
         শুধু এখানের মান বদলান। বাকি ফাইলে হাত দেওয়ার দরকার নেই।
      ====================================================== */
   const CONFIG = {
+    // কনসোলে (F12 → Console) ডায়াগনস্টিক লগ দেখাবে কিনা — সমস্যা ধরার পর false করে দিন
+    debug: true,
+
     /* ---- টপ ব্যানার: ডেস্কটপে 728x90, মোবাইলে 320x50 ----
        "provider": "directlink" (atOptions + invoke.js ধরনের নেটওয়ার্ক,
        যেমন highrevenueformat.com) | "adsense" | "none" */
@@ -116,6 +119,16 @@
     return prefix + "-" + Date.now() + "-" + slotCounter;
   }
 
+  // ডায়াগনস্টিক লগ — শুধু কনসোলে দেখায় (F12), কখনো কিছু throw করে না, পেজে কোনো প্রভাব ফেলে না
+  function log(msg) {
+    if (!CONFIG.debug) return;
+    try { console.info("[AR News Ads] " + msg); } catch (_) {}
+  }
+  function logWarn(msg) {
+    if (!CONFIG.debug) return;
+    try { console.warn("[AR News Ads] " + msg); } catch (_) {}
+  }
+
   // Ad Slot সম্পূর্ণভাবে লুকিয়ে দেয় — কোনো ফাঁকা জায়গা/মার্জিন থাকে না, ফলে ফিডের লেআউট স্বাভাবিকভাবে উপরে উঠে আসে
   function hideSlot(container) {
     if (!container) return;
@@ -177,28 +190,36 @@
       const slotToken = nextSlotId("dl");
       let settled = false;
 
-      function finish(ok) {
+      function finish(ok, reason) {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         global.removeEventListener("message", onMessage);
-        if (ok) showSlot(container);
-        else hideSlot(container);
+        if (ok) {
+          log("Ad সফলভাবে লোড হয়েছে ✅ (" + width + "x" + height + ", key: " + opts.key + ")");
+          showSlot(container);
+        } else {
+          logWarn("Ad লোড ব্যর্থ — Slot Hide করা হলো। কারণ: " + reason + " (key: " + opts.key + ")");
+          hideSlot(container);
+        }
       }
 
       function onMessage(event) {
         try {
           if (!iframe.contentWindow || event.source !== iframe.contentWindow) return;
           if (!event.data || event.data.arAdSlot !== slotToken) return;
-          finish(event.data.status === "loaded");
+          if (event.data.status === "loaded") finish(true);
+          else finish(false, "invoke.js script load ব্যর্থ হয়েছে (সম্ভবত AdBlock বা নেটওয়ার্ক সমস্যা)");
         } catch (_) {}
       }
 
       global.addEventListener("message", onMessage);
-      const timer = setTimeout(function () { finish(false); }, CONFIG.fillTimeoutMs);
+      const timer = setTimeout(function () {
+        finish(false, "নির্ধারিত " + CONFIG.fillTimeoutMs + "ms-এর মধ্যে কোনো সাড়া আসেনি (Timeout) — AdBlock, ধীর নেটওয়ার্ক, বা Ad Network-এ এই Zone অ্যাপ্রুভড/অ্যাক্টিভ না থাকলে এমন হয়");
+      }, CONFIG.fillTimeoutMs);
 
       const doc = iframe.contentWindow && iframe.contentWindow.document;
-      if (!doc) { finish(false); return; }
+      if (!doc) { finish(false, "iframe.contentWindow.document অ্যাক্সেস করা যায়নি"); return; }
 
       const scriptUrl = String(opts.scriptHost).replace(/\/+$/, "") + "/" + opts.key + "/invoke.js";
       const atOptionsJSON = JSON.stringify({
@@ -207,6 +228,7 @@
 
       // iframe-এর নিজস্ব, বিচ্ছিন্ন ডকুমেন্টের ভেতরে atOptions + invoke.js বসানো হচ্ছে —
       // মূল পেজে কখনোই document.write চলে না, তাই পুরো সাইট নিরাপদ থাকে
+      log("Ad Script অনুরোধ পাঠানো হচ্ছে: " + scriptUrl);
       const html =
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" +
         "<style>html,body{margin:0;padding:0;overflow:hidden;background:transparent}</style></head><body>" +
@@ -221,6 +243,7 @@
       doc.close();
     } catch (err) {
       // এই Ad Slot-এ যেকোনো সমস্যা হলেও বাকি পেজ/ফিড স্বাভাবিকভাবে চলবে
+      logWarn("loadDirectLinkAd-এ অপ্রত্যাশিত এরর: " + (err && err.message ? err.message : err));
       hideSlot(container);
     }
   }
@@ -230,6 +253,7 @@
      ====================================================== */
   function ensureAdSenseScript(clientId) {
     if (!clientId || clientId.indexOf("XXXX") !== -1) {
+      logWarn("AdSense client id কনফিগার করা হয়নি (CONFIG.inFeed.adsenseClientId এখনো প্লেসহোল্ডার)");
       return Promise.reject(new Error("AdSense client id কনফিগার করা হয়নি"));
     }
     if (adSenseScriptPromises[clientId]) return adSenseScriptPromises[clientId];
@@ -243,8 +267,11 @@
           "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=" +
           encodeURIComponent(clientId);
         script.crossOrigin = "anonymous";
-        script.onload = function () { resolve(); };
-        script.onerror = function () { reject(new Error("AdSense script load failed")); };
+        script.onload = function () { log("AdSense মূল স্ক্রিপ্ট লোড হয়েছে"); resolve(); };
+        script.onerror = function () {
+          logWarn("AdSense স্ক্রিপ্ট লোড ব্যর্থ (সম্ভবত AdBlock বা নেটওয়ার্ক সমস্যা)");
+          reject(new Error("AdSense script load failed"));
+        };
         document.head.appendChild(script);
       } catch (err) {
         reject(err);
@@ -258,27 +285,34 @@
     let settled = false;
     let observer = null;
 
-    function finish(filled) {
+    function finish(filled, reason) {
       if (settled) return;
       settled = true;
       try { if (observer) observer.disconnect(); } catch (_) {}
       clearTimeout(timer);
-      if (filled) showSlot(container);
-      else hideSlot(container);
+      if (filled) {
+        log("AdSense Ad সফলভাবে Fill হয়েছে ✅");
+        showSlot(container);
+      } else {
+        logWarn("AdSense Ad Unfilled/Timeout — Slot Hide করা হলো। কারণ: " + reason);
+        hideSlot(container);
+      }
     }
 
     try {
       observer = new MutationObserver(function () {
         const status = insEl.getAttribute("data-ad-status");
         if (status === "filled") finish(true);
-        else if (status === "unfilled") finish(false);
+        else if (status === "unfilled") finish(false, "Google থেকে data-ad-status=\"unfilled\" পাওয়া গেছে (এই Slot-এর জন্য কোনো বিজ্ঞাপন নেই)");
       });
       observer.observe(insEl, { attributes: true, attributeFilter: ["data-ad-status"] });
     } catch (_) {
       // MutationObserver না থাকলেও নিচের টাইমআউটের উপর ভরসা করা হবে
     }
 
-    const timer = setTimeout(function () { finish(false); }, CONFIG.fillTimeoutMs);
+    const timer = setTimeout(function () {
+      finish(false, "নির্ধারিত " + CONFIG.fillTimeoutMs + "ms-এর মধ্যে data-ad-status বসেনি (Timeout)");
+    }, CONFIG.fillTimeoutMs);
   }
 
   function loadAdSenseCreative(container, slotId, size, clientId) {
@@ -343,17 +377,26 @@
 
   function mountDesktopAd(containerId) {
     try {
-      if (!CONFIG.desktop.enabled) return;
+      if (!CONFIG.desktop.enabled) { log("desktop.enabled = false — টপ ব্যানার সম্পূর্ণ নিষ্ক্রিয় করা আছে"); return; }
       const container = document.getElementById(containerId);
-      if (!container) return;
+      if (!container) {
+        logWarn('mountDesktopAd("' + containerId + '") — এই id-র কোনো এলিমেন্ট DOM-এ পাওয়া যায়নি');
+        return;
+      }
 
       function pickAndLoad() {
         try {
           if (isMobileViewport()) {
             const m = CONFIG.desktop.mobile;
-            if (m && m.enabled) loadDesktopVariant(container, m);
-            else hideSlot(container);
+            if (m && m.enabled) {
+              log("মোবাইল ভিউপোর্ট শনাক্ত — " + m.width + "x" + m.height + " Ad লোড হচ্ছে (key: " + m.key + ")");
+              loadDesktopVariant(container, m);
+            } else {
+              log("মোবাইলে টপ ব্যানার নিষ্ক্রিয় (desktop.mobile.enabled = false) — Slot Hide থাকছে");
+              hideSlot(container);
+            }
           } else {
+            log("ডেস্কটপ ভিউপোর্ট শনাক্ত — " + CONFIG.desktop.width + "x" + CONFIG.desktop.height + " Ad লোড হচ্ছে (key: " + CONFIG.desktop.key + ")");
             loadDesktopVariant(container, CONFIG.desktop);
           }
         } catch (_) {
