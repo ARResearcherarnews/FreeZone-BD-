@@ -1,512 +1,399 @@
-/* ============================================================
-   Ads.js — AR News কেন্দ্রীয় বিজ্ঞাপন ব্যবস্থাপনা (Ad Management)
-   ------------------------------------------------------------
-   সব বিজ্ঞাপন সংক্রান্ত কোড ও লজিক এই একটি ফাইলে রাখা আছে।
-   "feed.html"-এর ভেতরে সরাসরি কোনো Ad Code নেই — feed.html শুধু
-   নিচের পাবলিক ফাংশনগুলো কল করে।
+// FreeZone BD - Ads
+//
+// How it works
+//  1. Nothing changes on the page by default: no space is reserved for ads.
+//  2. When ad data is ready and the ad image has loaded, a slot is inserted between two posts,
+//     the gap opens smoothly and the ad appears.
+//  3. If anything fails (no ads, no permission, no network, image error, ads.js problem),
+//     nothing is inserted and the feed stays exactly as it was.
+//
+// Use:  import("./ads.js").then((m) => m.insertAds(container, { placement: "feed" }))
+//       Call it after the posts have been rendered into `container`.
+//
+// Firebase data (add from the Firebase Console):
+//   ads/{adId} = {
+//     active: true, advertiser: "Shop name", logoURL: "https://...", title: "Headline",
+//     text: "Short description", imageURL: "https://...", link: "https://...", cta: "Learn more",
+//     startAt: 1767225600000, endAt: 1769904000000,          // optional, milliseconds
+//     placements: { feed: true, profile: true },             // optional, default: everywhere
+//     impressions: 0, clicks: 0
+//   }
+//   config/ads = { enabled: true, feed: { firstAfter: 3, every: 5 }, profile: { firstAfter: 2, every: 6 } }   // optional
 
-   ভবিষ্যতে Ad Network বা Ad Code পরিবর্তন করতে হলে শুধু এই
-   ফাইলের CONFIG অবজেক্ট (আর দরকার হলে loadDirectLinkAd /
-   loadAdSenseCreative ফাংশন) বদলালেই হবে — "feed.html"-এ আর হাত
-   দেওয়ার দরকার নেই।
+import { db } from "./config.js";
 
-   পাবলিক API (window.AdsManager):
-     - mountDesktopAd(containerId)
-         পেজের টপ ব্যানার Ad Container-এ বিজ্ঞাপন বসায়:
-         ডেস্কটপে 728x90, মোবাইলে 320x50 — ডিভাইস অনুযায়ী কোনটা
-         দেখাবে সেটা এই ফাইলই স্বয়ংক্রিয়ভাবে ঠিক করে।
+import {
+  ref,
+  get,
+  update,
+  increment
+} from "https://www.gstatic.com/firebasejs/12.2.1/firebase-database.js";
 
-     - renderFeedWithAds(items, renderItemFn)
-         পোস্টের অ্যারে ([id, post] জোড়ার লিস্ট) ও একটি পোস্ট
-         রেন্ডার করার ফাংশন নিয়ে, নির্দিষ্ট বিরতিতে Ad Slot বসিয়ে
-         সম্পূর্ণ HTML string রিটার্ন করে।
+import { escapeHtml, showToast } from "./post.js";
 
-     - loadFeedAds(rootEl)
-         renderFeedWithAds() থেকে তৈরি HTML DOM-এ বসানোর পর এটি
-         কল করলে, সেই মুহূর্তে DOM-এ থাকা সব pending Ad Slot লোড
-         হওয়া শুরু করে।
+/* ---------------------------------------------------------------
+   Settings
+---------------------------------------------------------------- */
+const DEFAULT_CONFIG = {
+  enabled: true,
+  feed: { firstAfter: 3, every: 5 },
+  profile: { firstAfter: 2, every: 6 }
+};
 
-   গুরুত্বপূর্ণ নকশা-সিদ্ধান্ত:
-     - কোনো Ad Slot ডিফল্টভাবে "display:none" (CSS-এ, feed.html
-       দেখুন)। Ad সফলভাবে Fill হলে তবেই "ar-ad-loaded" ক্লাস যোগ
-       হয়ে জায়গা তৈরি হয়। Fill না হলে/এরর হলে Slot চিরকাল
-       display:none-ই থেকে যায় — তাই কখনো ফাঁকা বক্স বা ভাঙা
-       iframe দেখা যায় না।
-     - প্রতিটি পাবলিক ফাংশন ও তার ভেতরের প্রতিটি ধাপ try/catch-এ
-       মোড়ানো। এই ফাইলে যেকোনো সমস্যা হলেও তা কখনো বাইরে ছুড়ে
-       মারা হয় না — feed.html-এর পোস্ট রেন্ডারিং বা বাকি সাইট
-       কখনো ভাঙবে না।
-   ============================================================ */
-(function (global) {
-  "use strict";
+const CACHE_MS = 5 * 60 * 1000; // re-read ads from Firebase at most every 5 minutes
+const IMAGE_TIMEOUT_MS = 6000; // give up on an ad whose image does not load in time
+const VISIBLE_MS = 1000; // an ad counts as "seen" after 1 second at least half visible
+const HIDDEN_KEY = "fz_hidden_ads";
 
-  /* ======================================================
-     ১) কনফিগারেশন — নতুন Ad Network / Ad Code ব্যবহার করতে
-        শুধু এখানের মান বদলান। বাকি ফাইলে হাত দেওয়ার দরকার নেই।
-     ====================================================== */
-  const CONFIG = {
-    // কনসোলে (F12 → Console) ডায়াগনস্টিক লগ দেখাবে কিনা — সমস্যা ধরার পর false করে দিন
-    debug: true,
+/* ---------------------------------------------------------------
+   Styles (injected once). The slot has no size until the ad is ready.
+---------------------------------------------------------------- */
+function injectStyles() {
+  if (document.getElementById("fz-ads-style")) return;
+  const style = document.createElement("style");
+  style.id = "fz-ads-style";
+  style.textContent = `
+    .fz-ad-slot {
+      display: grid; grid-template-rows: 0fr; opacity: 0; margin-top: 0 !important;
+      transition: grid-template-rows .5s cubic-bezier(.2,.8,.2,1), opacity .4s ease .1s, margin-top .5s cubic-bezier(.2,.8,.2,1);
+    }
+    .fz-ad-slot.fz-open { grid-template-rows: 1fr; opacity: 1; margin-top: 1rem !important; }
+    .fz-ad-slot.fz-instant { transition: none; }
+    .fz-ad-inner { min-height: 0; overflow: hidden; }
+    @media (prefers-reduced-motion: reduce) { .fz-ad-slot { transition: none; } }
+  `;
+  document.head.appendChild(style);
+}
 
-    /* ---- টপ ব্যানার: ডেস্কটপে 728x90, মোবাইলে 320x50 ----
-       "provider": "directlink" (atOptions + invoke.js ধরনের নেটওয়ার্ক,
-       যেমন highrevenueformat.com) | "adsense" | "none" */
-    desktop: {
-      enabled: true,
-      provider: "directlink",
-      key: "2a055eaf6e8b28080d8ab36185f15101",
-      scriptHost: "https://www.highrevenueformat.com",
-      width: 728,
-      height: 90,
-      // এই ভিউপোর্ট প্রস্থের নিচে সবকিছুকে "মোবাইল" ধরা হয় (feed.html-এর CSS ব্রেকপয়েন্টের সাথে মিলিয়ে রাখা)
-      minViewportWidth: 760,
+/* ---------------------------------------------------------------
+   Data
+---------------------------------------------------------------- */
+let dataCache = { time: 0, promise: null };
 
-      // মোবাইলে ঠিক এই জায়গাতেই আলাদা, ছোট সাইজের বিজ্ঞাপন দেখানো হয়।
-      // 728x90 ডেস্কটপ Ad মোবাইলে কখনোই লোড হয় না — এর বদলে এই কনফিগ ব্যবহার হয়।
-      mobile: {
-        enabled: true,
-        provider: "directlink",
-        key: "c71f8a3099f27536be6a3a3b33eee2a0",
-        scriptHost: "https://www.highrevenueformat.com",
-        width: 320,
-        height: 50,
-      },
-    },
+function safeUrl(url) {
+  try {
+    const parsed = new URL(String(url));
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : "";
+  } catch (error) {
+    return "";
+  }
+}
 
-    // ---- ফিডের পোস্টগুলোর মাঝে বিজ্ঞাপন (আপাতত AdSense — চাইলে এখানেও provider:"directlink" করে দেওয়া যাবে) ----
-    inFeed: {
-      enabled: true,
-      provider: "adsense",
-      adsenseClientId: "ca-pub-XXXXXXXXXXXXXXXX", // নিজের AdSense পাবলিশার আইডি বসান
-      interval: 3,          // প্রতি কতগুলো পোস্ট পরপর একটি Ad আসবে
-      startAfter: 3,         // প্রথম Ad কততম পোস্টের পর দেখাবে
-      showOnMobile: true,    // মোবাইলে ফিডের ভেতরের Ad দেখাতে চাইলে true রাখুন
-      desktopAdSlotId: "2222222222",
-      mobileAdSlotId: "3333333333",
-      format: "fluid",
-      layoutKey: "-6t+ed+2i-1n-4w",
-    },
-
-    // এই সময়ের (মিলিসেকেন্ড) মধ্যে কোনো Ad Slot Fill না হলে সেটি সম্পূর্ণ Hide হয়ে যাবে
-    fillTimeoutMs: 5000,
+function mergeConfig(remote) {
+  const config = {
+    enabled: DEFAULT_CONFIG.enabled,
+    feed: { ...DEFAULT_CONFIG.feed },
+    profile: { ...DEFAULT_CONFIG.profile }
   };
+  if (!remote || typeof remote !== "object") return config;
 
-  /* ======================================================
-     ২) অভ্যন্তরীণ অবস্থা
-     ====================================================== */
-  let slotCounter = 0;
-  const adSenseScriptPromises = {}; // clientId অনুযায়ী ক্যাশ করা থাকে, একই ক্লায়েন্টের স্ক্রিপ্ট বারবার লোড হয় না
+  if (remote.enabled === false) config.enabled = false;
+  ["feed", "profile"].forEach((key) => {
+    const value = remote[key];
+    if (!value || typeof value !== "object") return;
+    if (Number.isFinite(value.firstAfter) && value.firstAfter >= 1) config[key].firstAfter = Math.floor(value.firstAfter);
+    if (Number.isFinite(value.every) && value.every >= 2) config[key].every = Math.floor(value.every);
+  });
+  return config;
+}
 
-  /* ======================================================
-     ৩) সাধারণ সহায়ক ফাংশন
-     ====================================================== */
+function loadData() {
+  if (dataCache.promise && Date.now() - dataCache.time < CACHE_MS) return dataCache.promise;
 
-  // বর্তমান ভিউপোর্ট মোবাইল কিনা — matchMedia না থাকলেও নিরাপদভাবে fallback করে
-  function isMobileViewport() {
+  dataCache.time = Date.now();
+  dataCache.promise = (async () => {
+    let config = mergeConfig(null);
     try {
-      return !global.matchMedia("(min-width: " + CONFIG.desktop.minViewportWidth + "px)").matches;
-    } catch (_) {
-      try {
-        return global.innerWidth < CONFIG.desktop.minViewportWidth;
-      } catch (__) {
-        return true; // নির্ণয় করা না গেলে নিরাপদ পথ: মোবাইল ধরে নাও, ভারী Desktop Ad লোড হবে না
-      }
+      const configSnap = await get(ref(db, "config/ads"));
+      if (configSnap.exists()) config = mergeConfig(configSnap.val());
+    } catch (error) {
+      // No config is fine: defaults are used
     }
-  }
 
-  function nextSlotId(prefix) {
-    slotCounter += 1;
-    return prefix + "-" + Date.now() + "-" + slotCounter;
-  }
-
-  // ডায়াগনস্টিক লগ — শুধু কনসোলে দেখায় (F12), কখনো কিছু throw করে না, পেজে কোনো প্রভাব ফেলে না
-  function log(msg) {
-    if (!CONFIG.debug) return;
-    try { console.info("[AR News Ads] " + msg); } catch (_) {}
-  }
-  function logWarn(msg) {
-    if (!CONFIG.debug) return;
-    try { console.warn("[AR News Ads] " + msg); } catch (_) {}
-  }
-
-  // Ad Slot সম্পূর্ণভাবে লুকিয়ে দেয় — কোনো ফাঁকা জায়গা/মার্জিন থাকে না, ফলে ফিডের লেআউট স্বাভাবিকভাবে উপরে উঠে আসে
-  function hideSlot(container) {
-    if (!container) return;
+    const ads = [];
     try {
-      container.dataset.adPending = "false";
-      container.dataset.adStatus = "hidden";
-      container.classList.remove("ar-ad-loaded");
-      container.classList.add("ar-ad-hidden");
-      container.innerHTML = "";
-      container.style.width = "";
-      container.style.height = "";
-    } catch (_) {}
-  }
-
-  // Ad সফলভাবে দেখানো গেলে Slot-কে দৃশ্যমান করে, তখনই এটি জায়গা নেয়
-  function showSlot(container) {
-    if (!container) return;
-    try {
-      container.dataset.adPending = "false";
-      container.dataset.adStatus = "filled";
-      container.classList.remove("ar-ad-hidden");
-      container.classList.add("ar-ad-loaded");
-    } catch (_) {}
-  }
-
-  /* ======================================================
-     ৪) Provider: "directlink" — atOptions + invoke.js ধরনের নেটওয়ার্ক
-        (যেমন highrevenueformat.com / profitableratecpmnetwork.com জাতীয় নেটওয়ার্ক)
-        এই নেটওয়ার্কগুলোর কোড পুরনো ধাঁচের document.write ব্যবহার করে, তাই
-        সরাসরি মূল পেজে বসালে DOM-এর ক্ষতি হতে পারে। তাই এখানে প্রতিটি Ad
-        একটি আলাদা, sandbox করা <iframe>-এর ভেতরে বসানো হয় — মূল পেজ
-        সবসময় নিরাপদ থাকে, এবং postMessage দিয়ে Load/Error সংকেত পাওয়া যায়।
-     ====================================================== */
-  function loadDirectLinkAd(container, opts) {
-    if (!container) return;
-    try {
-      const width = opts.width;
-      const height = opts.height;
-
-      const iframe = document.createElement("iframe");
-      iframe.setAttribute("scrolling", "no");
-      iframe.setAttribute("frameborder", "0");
-      iframe.setAttribute("marginwidth", "0");
-      iframe.setAttribute("marginheight", "0");
-      // sandbox: স্ক্রিপ্ট চলবে, ক্লিকে নতুন ট্যাব খুলতে পারবে (স্বাভাবিক Ad ক্লিক-থ্রু), কিন্তু
-      // মূল পেজকে জোর করে অন্য কোনো সাইটে রিডাইরেক্ট করতে পারবে না
-      iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox");
-      iframe.title = "Advertisement";
-      iframe.style.border = "0";
-      iframe.style.overflow = "hidden";
-      iframe.style.width = width + "px";
-      iframe.style.height = height + "px";
-
-      container.style.width = width + "px";
-      container.style.height = height + "px";
-      container.innerHTML = "";
-      container.appendChild(iframe);
-
-      const slotToken = nextSlotId("dl");
-      let settled = false;
-
-      function finish(ok, reason) {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        global.removeEventListener("message", onMessage);
-        if (ok) {
-          log("Ad সফলভাবে লোড হয়েছে ✅ (" + width + "x" + height + ", key: " + opts.key + ")");
-          showSlot(container);
-        } else {
-          logWarn("Ad লোড ব্যর্থ — Slot Hide করা হলো। কারণ: " + reason + " (key: " + opts.key + ")");
-          hideSlot(container);
-        }
-      }
-
-      function onMessage(event) {
-        try {
-          if (!iframe.contentWindow || event.source !== iframe.contentWindow) return;
-          if (!event.data || event.data.arAdSlot !== slotToken) return;
-          if (event.data.status === "loaded") finish(true);
-          else finish(false, "invoke.js script load ব্যর্থ হয়েছে (সম্ভবত AdBlock বা নেটওয়ার্ক সমস্যা)");
-        } catch (_) {}
-      }
-
-      global.addEventListener("message", onMessage);
-      const timer = setTimeout(function () {
-        finish(false, "নির্ধারিত " + CONFIG.fillTimeoutMs + "ms-এর মধ্যে কোনো সাড়া আসেনি (Timeout) — AdBlock, ধীর নেটওয়ার্ক, বা Ad Network-এ এই Zone অ্যাপ্রুভড/অ্যাক্টিভ না থাকলে এমন হয়");
-      }, CONFIG.fillTimeoutMs);
-
-      const doc = iframe.contentWindow && iframe.contentWindow.document;
-      if (!doc) { finish(false, "iframe.contentWindow.document অ্যাক্সেস করা যায়নি"); return; }
-
-      const scriptUrl = String(opts.scriptHost).replace(/\/+$/, "") + "/" + opts.key + "/invoke.js";
-      const atOptionsJSON = JSON.stringify({
-        key: opts.key, format: "iframe", height: height, width: width, params: {}
+      const adsSnap = await get(ref(db, "ads"));
+      adsSnap.forEach((child) => {
+        ads.push({ id: child.key, ...child.val() });
       });
-
-      // iframe-এর নিজস্ব, বিচ্ছিন্ন ডকুমেন্টের ভেতরে atOptions + invoke.js বসানো হচ্ছে —
-      // মূল পেজে কখনোই document.write চলে না, তাই পুরো সাইট নিরাপদ থাকে
-      log("Ad Script অনুরোধ পাঠানো হচ্ছে: " + scriptUrl);
-      const html =
-        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" +
-        "<style>html,body{margin:0;padding:0;overflow:hidden;background:transparent}</style></head><body>" +
-        "<script>window.atOptions=" + atOptionsJSON + ";</script>" +
-        "<script src=\"" + scriptUrl + "\" " +
-        "onload=\"parent.postMessage({arAdSlot:'" + slotToken + "',status:'loaded'}, '*')\" " +
-        "onerror=\"parent.postMessage({arAdSlot:'" + slotToken + "',status:'error'}, '*')\"></script>" +
-        "</body></html>";
-
-      doc.open();
-      doc.write(html);
-      doc.close();
-    } catch (err) {
-      // এই Ad Slot-এ যেকোনো সমস্যা হলেও বাকি পেজ/ফিড স্বাভাবিকভাবে চলবে
-      logWarn("loadDirectLinkAd-এ অপ্রত্যাশিত এরর: " + (err && err.message ? err.message : err));
-      hideSlot(container);
+    } catch (error) {
+      console.warn("Ads: could not read ads (the feed is unaffected):", error?.code || error);
     }
+    return { config, ads };
+  })();
+
+  return dataCache.promise;
+}
+
+/* ---------------------------------------------------------------
+   Hidden ads (the user pressed X)
+---------------------------------------------------------------- */
+const memoryHidden = new Set();
+
+function getHiddenIds() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]");
+    return new Set([...stored, ...memoryHidden]);
+  } catch (error) {
+    return new Set(memoryHidden);
   }
+}
 
-  /* ======================================================
-     ৫) Provider: "adsense" — Google AdSense (ইন-ফিড বিজ্ঞাপনের জন্য ব্যবহৃত)
-     ====================================================== */
-  function ensureAdSenseScript(clientId) {
-    if (!clientId || clientId.indexOf("XXXX") !== -1) {
-      logWarn("AdSense client id কনফিগার করা হয়নি (CONFIG.inFeed.adsenseClientId এখনো প্লেসহোল্ডার)");
-      return Promise.reject(new Error("AdSense client id কনফিগার করা হয়নি"));
-    }
-    if (adSenseScriptPromises[clientId]) return adSenseScriptPromises[clientId];
-
-    adSenseScriptPromises[clientId] = new Promise(function (resolve, reject) {
-      try {
-        if (global.adsbygoogle) { resolve(); return; }
-        const script = document.createElement("script");
-        script.async = true;
-        script.src =
-          "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=" +
-          encodeURIComponent(clientId);
-        script.crossOrigin = "anonymous";
-        script.onload = function () { log("AdSense মূল স্ক্রিপ্ট লোড হয়েছে"); resolve(); };
-        script.onerror = function () {
-          logWarn("AdSense স্ক্রিপ্ট লোড ব্যর্থ (সম্ভবত AdBlock বা নেটওয়ার্ক সমস্যা)");
-          reject(new Error("AdSense script load failed"));
-        };
-        document.head.appendChild(script);
-      } catch (err) {
-        reject(err);
-      }
-    });
-    return adSenseScriptPromises[clientId];
+function rememberHidden(adId) {
+  memoryHidden.add(adId);
+  try {
+    const list = [...getHiddenIds()].slice(-100);
+    localStorage.setItem(HIDDEN_KEY, JSON.stringify(list));
+  } catch (error) {
+    // Storage unavailable: the ad stays hidden until the page is reloaded
   }
+}
 
-  // <ins class="adsbygoogle"> এলিমেন্টে Google data-ad-status="filled"/"unfilled" বসার জন্য অপেক্ষা করে
-  function watchAdSenseFill(insEl, container) {
-    let settled = false;
-    let observer = null;
+/* ---------------------------------------------------------------
+   Choosing ads
+---------------------------------------------------------------- */
+function isEligible(ad, placement, now, hidden) {
+  if (ad.active !== true || hidden.has(ad.id)) return false;
+  if (Number.isFinite(ad.startAt) && now < ad.startAt) return false;
+  if (Number.isFinite(ad.endAt) && now > ad.endAt) return false;
+  if (ad.placements && typeof ad.placements === "object" && ad.placements[placement] !== true) return false;
+  if (!ad.text && !ad.title && !ad.imageURL) return false;
+  return true;
+}
 
-    function finish(filled, reason) {
-      if (settled) return;
-      settled = true;
-      try { if (observer) observer.disconnect(); } catch (_) {}
+// A random starting point per page load, so different people see different ads first
+let rotation = Math.floor(Math.random() * 1000);
+
+/* ---------------------------------------------------------------
+   Image preloading: an ad is only shown once its image is ready
+---------------------------------------------------------------- */
+const readyImages = new Map(); // url -> { width, height }
+
+function preloadImage(url) {
+  if (!url) return Promise.resolve({ width: 0, height: 0 });
+  if (readyImages.has(url)) return Promise.resolve(readyImages.get(url));
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    const timer = setTimeout(() => {
+      img.src = "";
+      resolve(null);
+    }, IMAGE_TIMEOUT_MS);
+
+    img.onload = () => {
       clearTimeout(timer);
-      if (filled) {
-        log("AdSense Ad সফলভাবে Fill হয়েছে ✅");
-        showSlot(container);
-      } else {
-        logWarn("AdSense Ad Unfilled/Timeout — Slot Hide করা হলো। কারণ: " + reason);
-        hideSlot(container);
-      }
-    }
+      const size = { width: img.naturalWidth, height: img.naturalHeight };
+      readyImages.set(url, size);
+      resolve(size);
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      resolve(null);
+    };
+    img.src = url;
+  });
+}
 
-    try {
-      observer = new MutationObserver(function () {
-        const status = insEl.getAttribute("data-ad-status");
-        if (status === "filled") finish(true);
-        else if (status === "unfilled") finish(false, "Google থেকে data-ad-status=\"unfilled\" পাওয়া গেছে (এই Slot-এর জন্য কোনো বিজ্ঞাপন নেই)");
-      });
-      observer.observe(insEl, { attributes: true, attributeFilter: ["data-ad-status"] });
-    } catch (_) {
-      // MutationObserver না থাকলেও নিচের টাইমআউটের উপর ভরসা করা হবে
-    }
+/* ---------------------------------------------------------------
+   Tracking
+---------------------------------------------------------------- */
+const countedImpressions = new Set();
+const shownBefore = new Set(); // ads already opened once: re-renders show them without animation
 
-    const timer = setTimeout(function () {
-      finish(false, "নির্ধারিত " + CONFIG.fillTimeoutMs + "ms-এর মধ্যে data-ad-status বসেনি (Timeout)");
-    }, CONFIG.fillTimeoutMs);
-  }
+function track(adId, field) {
+  update(ref(db, `ads/${adId}`), { [field]: increment(1) }).catch(() => {});
+}
 
-  function loadAdSenseCreative(container, slotId, size, clientId) {
-    if (!container) return;
-    try {
-      const ins = document.createElement("ins");
-      ins.className = "adsbygoogle";
-      ins.style.display = "block";
-      ins.setAttribute("data-ad-client", clientId);
-      ins.setAttribute("data-ad-slot", slotId);
+function watchImpression(slot, adId, placement) {
+  const key = `${adId}:${placement}`;
+  if (countedImpressions.has(key) || !("IntersectionObserver" in window)) return;
 
-      if (size === "fluid") {
-        ins.setAttribute("data-ad-format", CONFIG.inFeed.format);
-        ins.setAttribute("data-ad-layout-key", CONFIG.inFeed.layoutKey);
-        ins.style.width = "100%";
-      } else {
-        ins.style.width = size.width + "px";
-        ins.style.height = size.height + "px";
-        container.style.width = size.width + "px";
-        container.style.height = size.height + "px";
-      }
-
-      container.innerHTML = "";
-      container.appendChild(ins);
-
-      ensureAdSenseScript(clientId)
-        .then(function () {
-          try {
-            (global.adsbygoogle = global.adsbygoogle || []).push({});
-          } catch (_) {
-            hideSlot(container);
-            return;
-          }
-          watchAdSenseFill(ins, container);
-        })
-        .catch(function () {
-          hideSlot(container);
-        });
-    } catch (err) {
-      hideSlot(container);
-    }
-  }
-
-  /* ======================================================
-     ৬) পাবলিক: টপ ব্যানার — ডেস্কটপে 728x90, মোবাইলে 320x50
-     ====================================================== */
-  function loadDesktopVariant(container, variant) {
-    if (!variant || !variant.enabled) { hideSlot(container); return; }
-    if (variant.provider === "directlink") {
-      loadDirectLinkAd(container, variant);
-    } else if (variant.provider === "adsense") {
-      loadAdSenseCreative(
-        container,
-        variant.adSlotId,
-        { width: variant.width, height: variant.height },
-        variant.adsenseClientId
-      );
-    } else {
-      hideSlot(container);
-    }
-  }
-
-  function mountDesktopAd(containerId) {
-    try {
-      if (!CONFIG.desktop.enabled) { log("desktop.enabled = false — টপ ব্যানার সম্পূর্ণ নিষ্ক্রিয় করা আছে"); return; }
-      const container = document.getElementById(containerId);
-      if (!container) {
-        logWarn('mountDesktopAd("' + containerId + '") — এই id-র কোনো এলিমেন্ট DOM-এ পাওয়া যায়নি');
+  let timer = null;
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const entry = entries[0];
+      if (!slot.isConnected) {
+        clearTimeout(timer);
+        observer.disconnect();
         return;
       }
-
-      function pickAndLoad() {
-        try {
-          if (isMobileViewport()) {
-            const m = CONFIG.desktop.mobile;
-            if (m && m.enabled) {
-              log("মোবাইল ভিউপোর্ট শনাক্ত — " + m.width + "x" + m.height + " Ad লোড হচ্ছে (key: " + m.key + ")");
-              loadDesktopVariant(container, m);
-            } else {
-              log("মোবাইলে টপ ব্যানার নিষ্ক্রিয় (desktop.mobile.enabled = false) — Slot Hide থাকছে");
-              hideSlot(container);
-            }
-          } else {
-            log("ডেস্কটপ ভিউপোর্ট শনাক্ত — " + CONFIG.desktop.width + "x" + CONFIG.desktop.height + " Ad লোড হচ্ছে (key: " + CONFIG.desktop.key + ")");
-            loadDesktopVariant(container, CONFIG.desktop);
-          }
-        } catch (_) {
-          hideSlot(container);
-        }
+      if (entry.isIntersecting) {
+        if (timer) return;
+        timer = setTimeout(() => {
+          if (countedImpressions.has(key)) return;
+          countedImpressions.add(key);
+          track(adId, "impressions");
+          observer.disconnect();
+        }, VISIBLE_MS);
+      } else {
+        clearTimeout(timer);
+        timer = null;
       }
+    },
+    { threshold: 0.5 }
+  );
+  observer.observe(slot);
+}
 
-      let currentlyMobile = isMobileViewport();
-      pickAndLoad();
+/* ---------------------------------------------------------------
+   The ad card
+---------------------------------------------------------------- */
+function buildAdCard(ad, imageSize) {
+  const link = safeUrl(ad.link);
+  const imageURL = imageSize && ad.imageURL ? safeUrl(ad.imageURL) : "";
+  const advertiser = ad.advertiser || ad.title || "Sponsored";
+  const initial = escapeHtml(String(advertiser).trim().charAt(0).toUpperCase() || "A");
+  const logoURL = safeUrl(ad.logoURL);
+  const ratio = imageSize && imageSize.width && imageSize.height ? `${imageSize.width} / ${imageSize.height}` : "16 / 9";
 
-      // ব্রাউজার উইন্ডো রিসাইজ করে মোবাইল ↔ ডেস্কটপ ব্রেকপয়েন্ট পার হলে সঠিক ভ্যারিয়েন্টটা (আবার) লোড করে
-      let resizeTimer;
-      global.addEventListener("resize", function () {
-        clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(function () {
-          try {
-            const nowMobile = isMobileViewport();
-            if (nowMobile !== currentlyMobile) {
-              currentlyMobile = nowMobile;
-              pickAndLoad();
-            }
-          } catch (_) {}
-        }, 150);
-      });
-    } catch (err) {
-      // টপ ব্যানার Ad ব্যর্থ হলেও বাকি পেজ স্বাভাবিকভাবে চলবে
+  const body = `
+    ${ad.title && ad.text ? `<h3 class="font-label-lg text-label-lg text-on-surface px-4 pt-3 break-words">${escapeHtml(ad.title)}</h3>` : ""}
+    ${
+      ad.text || ad.title
+        ? `<p class="font-body-md text-body-md text-on-surface leading-relaxed whitespace-pre-wrap break-words px-4 ${ad.title && ad.text ? "pt-1" : "pt-3"}">${escapeHtml(ad.text || ad.title)}</p>`
+        : ""
     }
+    ${
+      imageURL
+        ? `<div class="mt-3 bg-surface-container"><img src="${escapeHtml(imageURL)}" alt="" class="w-full object-cover block" style="aspect-ratio:${ratio};max-height:24rem;" /></div>`
+        : ""
+    }
+    ${
+      link
+        ? `<div class="flex items-center justify-between gap-3 px-4 py-3 ${imageURL ? "" : "mt-1"}">
+             <span class="font-body-sm text-body-sm text-slate-muted truncate">${escapeHtml(new URL(link).hostname.replace(/^www\./, ""))}</span>
+             <span class="flex-shrink-0 px-4 py-1.5 rounded-full bg-primary-container text-white font-label-md text-label-md font-semibold">${escapeHtml(ad.cta || "Learn more")}</span>
+           </div>`
+        : `<div class="pb-4"></div>`
+    }
+  `;
+
+  const card = document.createElement("article");
+  card.className = "bg-slate-surface border border-slate-border rounded-2xl shadow-sm overflow-hidden";
+  card.dataset.adId = ad.id;
+  card.innerHTML = `
+    <div class="flex items-center justify-between gap-3 px-4 pt-4">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="relative w-10 h-10 rounded-full bg-primary-fixed text-primary flex items-center justify-center font-label-lg text-label-lg flex-shrink-0 overflow-hidden">
+          ${initial}
+          ${logoURL ? `<img src="${escapeHtml(logoURL)}" alt="" class="absolute inset-0 w-full h-full object-cover bg-white" onerror="this.remove()" />` : ""}
+        </div>
+        <div class="min-w-0">
+          <div class="font-label-lg text-label-lg text-on-surface truncate">${escapeHtml(advertiser)}</div>
+          <div class="font-body-sm text-body-sm text-slate-muted">Sponsored</div>
+        </div>
+      </div>
+      <button type="button" class="fz-ad-hide w-8 h-8 rounded-full flex items-center justify-center text-slate-muted hover:bg-surface-container active:scale-95 transition-all flex-shrink-0" aria-label="Hide this ad">
+        <span class="material-symbols-outlined text-[20px]">close</span>
+      </button>
+    </div>
+    ${link ? `<a class="fz-ad-link block" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer sponsored">${body}</a>` : body}
+  `;
+  return card;
+}
+
+/* ---------------------------------------------------------------
+   Slots
+---------------------------------------------------------------- */
+function closeSlot(slot) {
+  slot.classList.remove("fz-open");
+  setTimeout(() => slot.remove(), 600);
+}
+
+function openSlot(slot, instant) {
+  if (instant) {
+    slot.classList.add("fz-instant", "fz-open");
+    return;
   }
+  slot.getBoundingClientRect(); // make sure the closed state is painted first
+  requestAnimationFrame(() => requestAnimationFrame(() => slot.classList.add("fz-open")));
+}
 
-  /* ======================================================
-     ৭) পাবলিক: ফিডের পোস্টগুলোর মাঝে Ad Slot তৈরি ও লোড করা
-     ====================================================== */
+function createSlot(ad, imageSize, placement) {
+  const slot = document.createElement("div");
+  slot.className = "fz-ad-slot";
+  slot.dataset.adId = ad.id;
 
-  function buildFeedAdSlotHTML() {
-    const id = nextSlotId("ar-ad-infeed");
-    return (
-      '<div class="ar-ad-slot ar-ad-infeed" id="' + id + '" ' +
-      'data-ad-pending="true" data-ad-role="infeed"></div>'
+  const inner = document.createElement("div");
+  inner.className = "fz-ad-inner";
+  const card = buildAdCard(ad, imageSize);
+  inner.appendChild(card);
+  slot.appendChild(inner);
+
+  card.querySelector(".fz-ad-hide").addEventListener("click", () => {
+    rememberHidden(ad.id);
+    document.querySelectorAll(`.fz-ad-slot[data-ad-id="${CSS.escape(ad.id)}"]`).forEach(closeSlot);
+    showToast("Ad hidden");
+  });
+
+  const linkEl = card.querySelector(".fz-ad-link");
+  if (linkEl) linkEl.addEventListener("click", () => track(ad.id, "clicks"));
+
+  watchImpression(slot, ad.id, placement);
+  return slot;
+}
+
+/* ---------------------------------------------------------------
+   Public API
+---------------------------------------------------------------- */
+export function clearAds(container) {
+  container.querySelectorAll(":scope > .fz-ad-slot").forEach((slot) => slot.remove());
+}
+
+/**
+ * Inserts ads between the posts that are already in `container`.
+ * Safe to call after every render: it never throws and never leaves an empty gap.
+ */
+export async function insertAds(container, { placement = "feed" } = {}) {
+  try {
+    if (!container) return;
+    injectStyles();
+
+    // Only the latest call for this container may insert anything
+    const run = (container.__fzAdsRun = (container.__fzAdsRun || 0) + 1);
+    clearAds(container);
+
+    const { config, ads } = await loadData();
+    if (container.__fzAdsRun !== run) return;
+    if (!config.enabled) return;
+
+    const hidden = getHiddenIds();
+    const now = Date.now();
+    const eligible = ads.filter((ad) => isEligible(ad, placement, now, hidden));
+    if (!eligible.length) return;
+
+    // Which posts get an ad after them
+    const posts = Array.from(container.children).filter((el) => el.tagName === "ARTICLE");
+    const { firstAfter, every } = config[placement] || config.feed;
+    const anchors = [];
+    posts.forEach((post, index) => {
+      const position = index + 1;
+      const isSpot = position === firstAfter || (position > firstAfter && (position - firstAfter) % every === 0);
+      if (isSpot && position < posts.length) anchors.push(post);
+    });
+    if (!anchors.length) return;
+
+    await Promise.all(
+      anchors.map(async (anchor, slotIndex) => {
+        // Try up to 3 different ads for this spot; if all fail, the spot simply stays empty
+        for (let attempt = 0; attempt < Math.min(3, eligible.length); attempt++) {
+          const ad = eligible[(rotation + slotIndex + attempt) % eligible.length];
+          const imageSize = await preloadImage(safeUrl(ad.imageURL));
+          if (imageSize === null) continue; // image failed: try the next ad
+
+          if (container.__fzAdsRun !== run || !anchor.isConnected) return;
+
+          const slot = createSlot(ad, imageSize, placement);
+          anchor.after(slot);
+          const instant = shownBefore.has(`${ad.id}:${placement}`);
+          shownBefore.add(`${ad.id}:${placement}`);
+          openSlot(slot, instant);
+          return;
+        }
+      })
     );
+  } catch (error) {
+    // Ads must never break the page
+    console.warn("Ads: skipped because of an error:", error);
   }
-
-  // Feed-এর পোস্টগুলোর HTML-এর সাথে নির্দিষ্ট বিরতিতে Ad Slot বসিয়ে সম্পূর্ণ HTML string রিটার্ন করে।
-  // Firebase থেকে যতগুলো পোস্টই লোড হোক, Ad Placement এই লজিক অনুযায়ী স্বয়ংক্রিয়ভাবে ঠিক জায়গায় বসে যায়।
-  function renderFeedWithAds(items, renderItemFn) {
-    try {
-      if (!Array.isArray(items) || typeof renderItemFn !== "function") return "";
-      if (!CONFIG.inFeed.enabled) return items.map(renderItemFn).join("");
-
-      let html = "";
-      items.forEach(function (item, i) {
-        html += renderItemFn(item);
-        const postNumber = i + 1;
-        const afterStart = postNumber >= CONFIG.inFeed.startAfter;
-        const onInterval = (postNumber - CONFIG.inFeed.startAfter) % CONFIG.inFeed.interval === 0;
-        if (afterStart && onInterval) {
-          html += buildFeedAdSlotHTML();
-        }
-      });
-      return html;
-    } catch (err) {
-      try { return items.map(renderItemFn).join(""); } catch (_) { return ""; }
-    }
-  }
-
-  // renderFeedWithAds() থেকে তৈরি HTML DOM-এ বসানোর পর এটি কল করলে pending সব ইন-ফিড Ad Slot লোড হওয়া শুরু করে
-  function loadFeedAds(rootEl) {
-    try {
-      if (!CONFIG.inFeed.enabled) return;
-      const root = rootEl || document;
-      const pending = root.querySelectorAll(
-        '.ar-ad-slot[data-ad-role="infeed"][data-ad-pending="true"]'
-      );
-      pending.forEach(function (container) {
-        try {
-          const mobile = isMobileViewport();
-          if (mobile && !CONFIG.inFeed.showOnMobile) {
-            hideSlot(container);
-            return;
-          }
-          const slotId = mobile
-            ? (CONFIG.inFeed.mobileAdSlotId || CONFIG.inFeed.desktopAdSlotId)
-            : CONFIG.inFeed.desktopAdSlotId;
-
-          if (CONFIG.inFeed.provider === "adsense") {
-            loadAdSenseCreative(container, slotId, "fluid", CONFIG.inFeed.adsenseClientId);
-          } else if (CONFIG.inFeed.provider === "directlink") {
-            loadDirectLinkAd(container, {
-              key: slotId,
-              scriptHost: CONFIG.desktop.scriptHost,
-              width: mobile ? CONFIG.desktop.mobile.width : CONFIG.desktop.width,
-              height: mobile ? CONFIG.desktop.mobile.height : CONFIG.desktop.height,
-            });
-          } else {
-            hideSlot(container);
-          }
-        } catch (err) {
-          hideSlot(container);
-        }
-      });
-    } catch (err) {
-      // pending স্লট খুঁজতে সমস্যা হলেও Feed রেন্ডারিং কখনো থেমে থাকবে না
-    }
-  }
-
-  /* ======================================================
-     ৮) পাবলিক API এক্সপোজ
-     ====================================================== */
-  global.AdsManager = {
-    mountDesktopAd: mountDesktopAd,
-    renderFeedWithAds: renderFeedWithAds,
-    loadFeedAds: loadFeedAds,
-  };
-})(window);
+}
