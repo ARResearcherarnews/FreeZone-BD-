@@ -1,187 +1,342 @@
 <!DOCTYPE html>
-<html lang="bn">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AR News — Admin-কে মেসেজ করুন</title>
-<link rel="icon" href="logo.png">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+
+<title>AR News</title>
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Tiro+Bangla&family=Hind+Siliguri:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
+
 <style>
-  :root{
-    --bg:#f6f7f7; --ink:#151515; --muted:#6b6b6b; --line:#e3e3e3;
-    --brand:#0f766e; --brand-ink:#0b3d38; --brand-soft:#eef5f4;
-    --danger:#c0392b;
-    --font-display:'Tiro Bangla',Georgia,serif;
-    --safe-b: env(safe-area-inset-bottom, 0px);
-    --safe-t: env(safe-area-inset-top, 0px);
+:root{
+  --bg:#ffffff;
+  --ar:#0B3D91;
+  --brand:#0F766E;
+  --muted:#777777;
+}
+
+*{
+  box-sizing:border-box;
+}
+
+html,
+body{
+  width:100%;
+  height:100%;
+  margin:0;
+}
+
+body{
+  background:var(--bg);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+  font-family:'Hind Siliguri',system-ui,sans-serif;
+}
+
+/* =========================
+   SPLASH
+========================= */
+
+.splash{
+  width:100%;
+  height:100%;
+
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+
+  text-align:center;
+  cursor:pointer;
+  user-select:none;
+}
+
+/* =========================
+   AR NEWS LOGO
+========================= */
+
+.brand{
+  width:132px;
+  height:132px;
+
+  border-radius:50%;
+  border:3px solid var(--brand);
+
+  display:flex;
+  align-items:center;
+  justify-content:center;
+
+  position:relative;
+
+  opacity:0;
+  transform:scale(.72);
+
+  animation:
+    brand-in .7s cubic-bezier(.22,1,.36,1) forwards;
+
+  box-shadow:
+    0 0 0 7px rgba(15,118,110,.05),
+    0 12px 35px rgba(0,0,0,.08);
+}
+
+/* Inner circle */
+
+.brand::before{
+  content:"";
+
+  position:absolute;
+
+  width:112px;
+  height:112px;
+
+  border-radius:50%;
+
+  border:1px solid rgba(15,118,110,.16);
+}
+
+/* =========================
+   AR
+========================= */
+
+.ar{
+  position:absolute;
+  top:25px;
+
+  font-family:Arial,Helvetica,sans-serif;
+
+  font-size:48px;
+  line-height:1;
+
+  font-weight:800;
+  letter-spacing:-3px;
+
+  /* Professional dark blue */
+  color:var(--ar);
+
+  opacity:0;
+  transform:translateY(10px);
+
+  animation:
+    ar-in .55s cubic-bezier(.22,1,.36,1)
+    forwards;
+
+  animation-delay:.45s;
+}
+
+/* =========================
+   NEWS
+========================= */
+
+.news{
+  position:absolute;
+  bottom:25px;
+
+  font-family:Arial,Helvetica,sans-serif;
+
+  font-size:18px;
+  line-height:1;
+
+  font-weight:700;
+
+  letter-spacing:4px;
+  text-transform:uppercase;
+
+  color:var(--brand);
+
+  opacity:0;
+  transform:translateY(-8px);
+
+  animation:
+    news-in .55s cubic-bezier(.22,1,.36,1)
+    forwards;
+
+  animation-delay:.65s;
+}
+
+/* =========================
+   LINE
+========================= */
+
+.splash-rule{
+  width:38px;
+  height:3px;
+
+  margin-top:28px;
+
+  border-radius:10px;
+
+  background:var(--brand);
+
+  transform:scaleX(0);
+
+  animation:
+    rule-in .45s ease forwards;
+
+  animation-delay:1.05s;
+}
+
+/* =========================
+   TAGLINE
+========================= */
+
+.splash-tag{
+  margin-top:12px;
+
+  font-size:13px;
+
+  color:var(--muted);
+
+  letter-spacing:.4px;
+
+  opacity:0;
+
+  animation:
+    tag-in .5s ease forwards;
+
+  animation-delay:1.2s;
+}
+
+/* =========================
+   ANIMATIONS
+========================= */
+
+@keyframes brand-in{
+  0%{
+    opacity:0;
+    transform:scale(.72) rotate(-8deg);
   }
-  *{box-sizing:border-box}
-  html,body{margin:0;height:100%}
-  body{background:var(--bg);color:var(--ink);font-family:'Hind Siliguri',system-ui,sans-serif;display:flex;flex-direction:column;height:100%;overflow:hidden}
-  a{color:inherit}
-  button{-webkit-tap-highlight-color:transparent}
 
-  .ar-nav{display:flex;align-items:center;gap:12px;padding:calc(12px + var(--safe-t)) 16px 12px;background:#fff;border-bottom:1px solid var(--line);flex-shrink:0}
-  .ar-brand{display:flex;align-items:center;gap:9px;text-decoration:none;flex-shrink:0}
-  .ar-brand img{width:26px;height:26px;border-radius:7px;display:block}
-  .ar-nav h1{font-family:var(--font-display);font-size:16px;margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
+  70%{
+    opacity:1;
+    transform:scale(1.04) rotate(1deg);
+  }
 
-  .btn{display:inline-block;text-align:center;text-decoration:none;border:0;border-radius:10px;padding:11px 16px;background:var(--brand);color:#fff;font:inherit;font-weight:700;font-size:14px;cursor:pointer}
-  .btn:active{opacity:.85}
+  100%{
+    opacity:1;
+    transform:scale(1) rotate(0);
+  }
+}
 
-  #app{flex:1;min-height:0;display:flex;flex-direction:column}
+@keyframes ar-in{
+  to{
+    opacity:1;
+    transform:translateY(0);
+  }
+}
 
-  .gate{max-width:380px;margin:14vh auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:28px 24px;text-align:center}
-  .gate h2{font-family:var(--font-display);margin:0 0 8px;font-size:21px}
-  .gate p{color:var(--muted);font-size:13.5px;margin:0 0 18px;line-height:1.6}
-  .loading-line{color:var(--muted);text-align:center;padding:40px 10px;font-size:14px}
+@keyframes news-in{
+  to{
+    opacity:1;
+    transform:translateY(0);
+  }
+}
 
-  .unread-note{text-align:center;font-size:12px;color:var(--brand-ink);background:var(--brand-soft);padding:7px;flex-shrink:0;transition:opacity .4s}
-  .unread-note[hidden]{display:none}
+@keyframes rule-in{
+  to{
+    transform:scaleX(1);
+  }
+}
 
-  .chat-msgs{flex:1;min-height:0;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:8px}
-  .empty-chat{color:var(--muted);text-align:center;padding:30px 10px;font-size:13.5px}
-  .bubble{max-width:80%;padding:9px 12px;border-radius:14px;font-size:14px;line-height:1.55;overflow-wrap:anywhere}
-  .bubble.admin{align-self:flex-start;background:#f1f1f1;color:var(--ink);border-bottom-left-radius:4px}
-  .bubble.me{align-self:flex-end;background:var(--brand);color:#fff;border-bottom-right-radius:4px}
-  .bubble time{display:block;margin-top:4px;font-size:10.5px;opacity:.65}
+@keyframes tag-in{
+  to{
+    opacity:1;
+  }
+}
 
-  .chat-form{display:flex;gap:8px;padding:10px 12px calc(10px + var(--safe-b));border-top:1px solid var(--line);background:#fff;flex-shrink:0}
-  .chat-form input{flex:1;border:1px solid var(--line);border-radius:20px;padding:11px 16px;font:inherit;font-size:15px;background:#fff;color:var(--ink)}
-  .chat-form input:focus{outline:2px solid var(--brand);outline-offset:1px}
-  .chat-form button{border-radius:20px}
+/* =========================
+   MOBILE
+========================= */
+
+@media(max-width:480px){
+
+  .brand{
+    width:122px;
+    height:122px;
+  }
+
+  .brand::before{
+    width:104px;
+    height:104px;
+  }
+
+  .ar{
+    font-size:44px;
+    top:23px;
+  }
+
+  .news{
+    font-size:17px;
+    bottom:23px;
+    letter-spacing:3.5px;
+  }
+
+  .splash-rule{
+    margin-top:25px;
+  }
+}
+
+/* =========================
+   REDUCED MOTION
+========================= */
+
+@media(prefers-reduced-motion:reduce){
+
+  .brand,
+  .ar,
+  .news,
+  .splash-rule,
+  .splash-tag{
+    animation:none!important;
+    opacity:1!important;
+    transform:none!important;
+  }
+}
 </style>
 </head>
+
 <body>
-  <header class="ar-nav">
-    <a class="ar-brand" href="feed.html"><img src="logo.png" alt="AR News"></a>
-    <h1>Admin-কে মেসেজ করুন</h1>
-  </header>
 
-  <main id="app">
-    <div class="loading-line">লোড হচ্ছে…</div>
-  </main>
+<div class="splash" id="splash">
 
-  <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
-  <script src="config.js"></script>
-  <script>
-  (function () {
-    "use strict";
-    const app = document.getElementById("app");
-    let msgsRef = null, msgsHandler = null;
+  <!-- AR NEWS BRAND -->
+  <div class="brand" aria-label="AR News">
 
-    window.auth.onAuthStateChanged(function (user) {
-      cleanup();
-      if (!user) { renderGate(); return; }
-      renderChat(user);
-    });
+    <div class="ar">AR</div>
 
-    function cleanup() {
-      if (msgsRef && msgsHandler) msgsRef.off("child_added", msgsHandler);
-      msgsRef = null; msgsHandler = null;
-    }
+    <div class="news">News</div>
 
-    function renderGate() {
-      app.innerHTML =
-        '<div class="gate">' +
-          "<h2>চ্যাট করতে লগইন করুন</h2>" +
-          "<p>Admin-এর সাথে সরাসরি কথা বলতে হলে আগে আপনার একাউন্টে লগইন করুন।</p>" +
-          '<a class="btn" href="feed.html">ফিড পেজে ফিরে যান</a>' +
-        "</div>";
-    }
+  </div>
 
-    function renderChat(user) {
-      const uid = user.uid;
-      app.innerHTML =
-        '<div id="unread-note" class="unread-note" hidden></div>' +
-        '<div id="chat-msgs" class="chat-msgs"><div class="loading-line">মেসেজ লোড হচ্ছে…</div></div>' +
-        '<form id="chat-form" class="chat-form">' +
-          '<input id="chat-input" type="text" placeholder="একটি মেসেজ লিখুন…" autocomplete="off">' +
-          '<button type="submit" class="btn">পাঠান</button>' +
-        "</form>";
+  <div class="splash-rule"></div>
 
-      const box = document.getElementById("chat-msgs");
-      const note = document.getElementById("unread-note");
-      const metaRef = window.rtdb.ref("chats/" + uid + "/meta");
+  <div class="splash-tag">
+    News, fast and reliable
+  </div>
 
-      // পেজ ওপেন করা মানেই মেসেজ দেখা হয়ে গেছে ধরে unreadByUser রিসেট করা হচ্ছে,
-      // কিন্তু আগে কত নতুন মেসেজ ছিল সেটা একবার দেখিয়ে দেওয়া হচ্ছে।
-      metaRef.once("value").then(function (snap) {
-        const meta = snap.val() || {};
-        const unread = Number(meta.unreadByUser || 0);
-        if (unread > 0) {
-          note.hidden = false;
-          note.textContent = new Intl.NumberFormat("bn-BD").format(unread) + " টি নতুন মেসেজ";
-          setTimeout(function () { note.hidden = true; }, 2500);
-        }
-        metaRef.update({
-          unreadByUser: 0,
-          userName: user.displayName || user.email || "",
-          userEmail: user.email || "",
-        });
-      });
+</div>
 
-      box.innerHTML = "";
-      let hasAny = false;
-      msgsRef = window.rtdb.ref("chats/" + uid + "/messages").orderByKey();
-      msgsHandler = msgsRef.on("child_added", function (snap) {
-        hasAny = true;
-        appendBubble(box, snap.val() || {});
-        box.scrollTop = box.scrollHeight;
-      });
-      msgsRef.once("value").then(function (snap) {
-        if (!snap.exists() && !hasAny) {
-          box.innerHTML = '<div class="empty-chat">এখনো কোনো মেসেজ নেই। Admin-কে প্রথম মেসেজ পাঠান!</div>';
-        }
-      });
+<script>
 
-      document.getElementById("chat-form").addEventListener("submit", function (e) {
-        e.preventDefault();
-        const input = document.getElementById("chat-input");
-        const text = input.value.trim();
-        if (!text) return;
-        window.rtdb.ref("chats/" + uid + "/messages").push({
-          sender: "user",
-          text: text,
-          at: firebase.database.ServerValue.TIMESTAMP,
-        });
-        window.rtdb.ref("chats/" + uid + "/meta").update({
-          lastMessage: text,
-          lastMessageAt: firebase.database.ServerValue.TIMESTAMP,
-          lastSender: "user",
-          userName: user.displayName || user.email || "",
-          userEmail: user.email || "",
-        });
-        window.rtdb.ref("chats/" + uid + "/meta/unreadByAdmin").transaction(function (v) { return (v || 0) + 1; });
-        input.value = "";
-        input.focus();
-      });
-    }
+function goToFeed(){
+  window.location.href = "feed.html";
+}
 
-    function appendBubble(container, data) {
-      const empty = container.querySelector(".empty-chat");
-      if (empty) empty.remove();
-      const div = document.createElement("div");
-      div.className = "bubble " + (data.sender === "user" ? "me" : "admin");
-      const p = document.createElement("div");
-      p.textContent = data.text || "";
-      const t = document.createElement("time");
-      t.textContent = fmtTime(data.at);
-      div.appendChild(p);
-      div.appendChild(t);
-      container.appendChild(div);
-    }
+const timer = setTimeout(goToFeed, 3500);
+/* Tap to continue */
 
-    function fmtTime(ts) {
-      if (!ts) return "";
-      try {
-        return new Intl.DateTimeFormat("bn-BD", { hour: "2-digit", minute: "2-digit" }).format(new Date(ts));
-      } catch (_) { return ""; }
-    }
-  })();
-  </script>
+document.getElementById("splash").addEventListener("click", () => {
+
+  clearTimeout(timer);
+
+  goToFeed();
+
+});
+
+</script>
+
 </body>
 </html>
