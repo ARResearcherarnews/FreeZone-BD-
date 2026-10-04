@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport"/>
+<meta name="theme-color" content="#004ac6"/>
+<meta name="description" content="FreeZone BD — Connect, Share & Chat with friends in Bangladesh."/>
+<title>FreeZone BD - Connect. Share. Chat.</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "on-tertiary-fixed-variant": "#004395", "on-secondary-fixed": "#131b2e", "slate-dark": "#1e293b",
+            "slate-surface": "#ffffff", "on-secondary": "#ffffff", "secondary-container": "#dae2fd",
+            "slate-border": "#e2e8f0", "on-background": "#191c1e", "on-surface-variant": "#434655",
+            "tertiary-fixed": "#d8e2ff", "tertiary-container": "#0f69dc", "on-tertiary": "#ffffff",
+            "notification-rose": "#f43f5e", "surface-dim": "#d8dadc", "secondary": "#565e74",
+            "surface-container-highest": "#e0e3e5", "error-container": "#ffdad6", "inverse-surface": "#2d3133",
+            "secondary-fixed": "#dae2fd", "error": "#ba1a1a", "surface-bright": "#f7f9fb",
+            "surface-container-high": "#e6e8ea", "on-secondary-container": "#5c647a", "outline": "#737686",
+            "on-primary-fixed-variant": "#003ea8", "inverse-primary": "#b4c5ff", "on-surface": "#191c1e",
+            "on-primary": "#ffffff", "slate-subtle": "#94a3b8", "surface": "#f7f9fb",
+            "on-tertiary-fixed": "#001a42", "on-error-container": "#93000a", "tertiary": "#0051b1",
+            "surface-tint": "#0053db", "on-primary-fixed": "#00174b", "secondary-fixed-dim": "#bec6e0",
+            "background": "#f7f9fb", "surface-variant": "#e0e3e5", "on-secondary-fixed-variant": "#3f465c",
+            "slate-muted": "#64748b", "primary-fixed-dim": "#b4c5ff", "surface-container-lowest": "#ffffff",
+            "on-error": "#ffffff", "primary-container": "#2563eb", "surface-container-low": "#f2f4f6",
+            "online-emerald": "#10b981", "surface-container": "#eceef0", "primary-fixed": "#dbe1ff",
+            "tertiary-fixed-dim": "#adc6ff", "inverse-on-surface": "#eff1f3", "primary": "#004ac6",
+            "on-tertiary-container": "#edf0ff", "outline-variant": "#c3c6d7", "on-primary-container": "#eeefff"
+          },
+          "borderRadius": { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" },
+          "fontFamily": {
+            "headline-lg-mobile": ["Inter"], "label-lg": ["Inter"], "headline-md": ["Inter"], "display-lg": ["Inter"],
+            "label-sm": ["Inter"], "body-lg": ["Inter"], "headline-sm": ["Inter"], "body-sm": ["Inter"],
+            "headline-lg": ["Inter"], "body-md": ["Inter"], "label-md": ["Inter"]
+          },
+          "fontSize": {
+            "headline-lg-mobile": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+            "label-lg": ["14px", { "lineHeight": "20px", "letterSpacing": "0.005em", "fontWeight": "600" }],
+            "headline-md": ["22px", { "lineHeight": "28px", "letterSpacing": "-0.015em", "fontWeight": "600" }],
+            "display-lg": ["36px", { "lineHeight": "44px", "letterSpacing": "-0.025em", "fontWeight": "800" }],
+            "label-sm": ["11px", { "lineHeight": "14px", "letterSpacing": "0.02em", "fontWeight": "500" }],
+            "body-lg": ["16px", { "lineHeight": "24px", "letterSpacing": "-0.005em", "fontWeight": "400" }],
+            "headline-sm": ["18px", { "lineHeight": "24px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+            "body-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.01em", "fontWeight": "400" }],
+            "headline-lg": ["28px", { "lineHeight": "36px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+            "body-md": ["14px", { "lineHeight": "20px", "letterSpacing": "0em", "fontWeight": "400" }],
+            "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.015em", "fontWeight": "600" }]
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    .material-symbols-outlined {
+      font-family: 'Material Symbols Outlined'; font-weight: normal; font-style: normal;
+      font-size: 22px; line-height: 1; display: inline-block; text-transform: none;
+      letter-spacing: normal; word-wrap: normal; white-space: nowrap; direction: ltr;
+      -webkit-font-smoothing: antialiased;
+    }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    body { min-height: max(884px, 100dvh); }
+    [hidden] { display: none !important; }
+    .liked .like-icon { font-variation-settings: 'FILL' 1; }
+    .skeleton {
+      background: linear-gradient(90deg, #eceef0 25%, #f7f9fb 50%, #eceef0 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s infinite linear;
+    }
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .fade-in {
+      animation: fadeIn 0.35s ease-out forwards;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body class="bg-background text-on-surface antialiased min-h-screen flex flex-col justify-between selection:bg-primary-fixed selection:text-on-primary-fixed">
+
+<header class="w-full h-16 px-4 bg-slate-surface/95 backdrop-blur-md sticky top-0 z-50 flex items-center justify-between shadow-sm border-b border-slate-border/50">
+  <div class="flex flex-col justify-center">
+    <span class="font-headline-md text-headline-md font-bold text-primary tracking-tight">FreeZone BD</span>
+    <span class="font-label-sm text-label-sm text-slate-muted -mt-0.5 tracking-normal font-medium">Connect. Share. Chat.</span>
+  </div>
+  <div class="flex items-center gap-1 sm:gap-2">
+    <button aria-label="Notifications" class="nav-link relative w-10 h-10 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container active:scale-95 transition-all" data-page="notifications" data-title="Notifications">
+      <span class="material-symbols-outlined text-[22px]">notifications</span>
+    </button>
+  </div>
+</header>
+
+<main class="w-full max-w-lg mx-auto flex-1 px-3 sm:px-4 pt-4 pb-24 space-y-4">
+
+  <!-- Stories: the bar, the viewer and adding a story are all built by story.js -->
+  <section id="storiesBar" aria-label="Stories"></section>
+
+  <!-- Loading skeleton -->
+  <div id="postsSkeleton" class="space-y-4" hidden>
+    <div class="bg-slate-surface border border-slate-border rounded-2xl p-4 space-y-3">
+      <div class="flex items-center gap-3">
+        <div class="w-11 h-11 rounded-full skeleton"></div>
+        <div class="space-y-2 flex-1">
+          <div class="h-3.5 w-32 rounded skeleton"></div>
+          <div class="h-3 w-20 rounded skeleton"></div>
+        </div>
+      </div>
+      <div class="h-4 w-full rounded skeleton"></div>
+      <div class="h-4 w-4/5 rounded skeleton"></div>
+      <div class="h-40 w-full rounded-xl skeleton"></div>
+    </div>
+    <div class="bg-slate-surface border border-slate-border rounded-2xl p-4 space-y-3">
+      <div class="flex items-center gap-3">
+        <div class="w-11 h-11 rounded-full skeleton"></div>
+        <div class="space-y-2 flex-1">
+          <div class="h-3.5 w-28 rounded skeleton"></div>
+          <div class="h-3 w-16 rounded skeleton"></div>
+        </div>
+      </div>
+      <div class="h-4 w-full rounded skeleton"></div>
+      <div class="h-4 w-3/5 rounded skeleton"></div>
+    </div>
+  </div>
+
+  <!-- Empty state -->
+  <div id="emptyState" class="text-center py-14 px-6" hidden>
+    <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-primary-fixed/50 flex items-center justify-center">
+      <span class="material-symbols-outlined text-[32px] text-primary">forum</span>
+    </div>
+    <p class="font-headline-sm text-headline-sm text-on-surface font-semibold mb-1">No posts yet</p>
+    <p class="text-slate-muted font-body-sm text-body-sm">Be the first to share something with the community!</p>
+  </div>
+
+  <!-- Real-time posts -->
+  <div id="postsContainer" class="space-y-4"></div>
+
+</main>
+
+<nav class="fixed bottom-0 left-0 right-0 z-50 bg-slate-surface/95 backdrop-blur-md shadow-[0_-2px_12px_rgba(15,23,42,0.07)] h-16 max-w-lg mx-auto grid grid-cols-5 items-center px-2 border-t border-slate-border/40">
+  <a class="justify-self-center flex flex-col items-center justify-center text-primary-container relative py-1 transition-transform active:scale-95" href="#">
+    <span class="material-symbols-outlined text-[24px]" style="font-variation-settings: 'FILL' 1;">home</span>
+    <span class="font-label-sm text-label-sm font-bold mt-0.5">Home</span>
+    <span class="w-1.5 h-1.5 bg-primary-container rounded-full mt-0.5"></span>
+  </a>
+  <button class="nav-link justify-self-center flex flex-col items-center justify-center text-slate-subtle hover:text-on-surface py-1 transition-transform active:scale-95" data-page="friends" data-title="Friends">
+    <span class="material-symbols-outlined text-[24px]">group</span>
+    <span class="font-label-sm text-label-sm font-medium mt-0.5">Friends</span>
+  </button>
+  <div class="justify-self-center relative -top-4">
+    <button type="button" aria-label="Create Post" class="nav-link w-14 h-14 rounded-full bg-primary-container text-white ring-4 ring-slate-surface shadow-lg shadow-primary-container/40 flex items-center justify-center active:scale-90 transition-transform" data-page="create" data-title="Create Post">
+      <span class="material-symbols-outlined text-[30px]">add</span>
+    </button>
+  </div>
+  <button class="nav-link justify-self-center flex flex-col items-center justify-center text-slate-subtle hover:text-on-surface py-1 transition-transform active:scale-95" data-page="chat" data-title="Chat">
+    <span class="material-symbols-outlined text-[24px]">chat_bubble</span>
+    <span class="font-label-sm text-label-sm font-medium mt-0.5">Chat</span>
+  </button>
+  <button class="nav-link justify-self-center flex flex-col items-center justify-center text-slate-muted hover:text-on-surface py-1 transition-transform active:scale-95" data-page="profile" data-title="Profile">
+    <div id="navAvatar" class="w-6 h-6 rounded-full overflow-hidden ring-1 ring-slate-border bg-surface-container flex items-center justify-center">
+      <span class="material-symbols-outlined text-[16px] text-slate-subtle">person</span>
+    </div>
+    <span class="font-label-sm text-label-sm font-medium mt-0.5">Profile</span>
+  </button>
+</nav>
+
+<!-- Full-screen Post Detail -->
+<div id="postDetail" class="fixed inset-0 z-[80] bg-background flex flex-col" hidden>
+  <header class="w-full h-14 px-2 bg-slate-surface sticky top-0 flex items-center gap-2 shadow-sm flex-shrink-0 border-b border-slate-border/50">
+    <button id="postDetailBack" aria-label="Back" class="w-10 h-10 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container active:scale-95 transition-all">
+      <span class="material-symbols-outlined text-[22px]">arrow_back</span>
+    </button>
+    <span class="font-headline-sm text-headline-sm font-semibold">Post</span>
+  </header>
+  <div id="postDetailBody" class="flex-1 overflow-y-auto px-3 sm:px-4 py-4 space-y-4"></div>
+  <form id="postDetailCommentForm" class="flex items-center gap-2.5 p-3 border-t border-slate-border bg-slate-surface flex-shrink-0">
+    <input id="postDetailCommentInput" type="text" class="flex-1 bg-surface-container-low border border-transparent focus:border-primary-container focus:ring-2 focus:ring-primary-container/15 rounded-full px-4 py-2.5 text-body-sm text-body-sm outline-none transition-all" placeholder="Write a comment..." maxlength="300" />
+    <button type="submit" class="text-primary-container font-label-sm text-label-sm font-semibold px-3 py-2 rounded-full hover:bg-primary-fixed/40 active:scale-95 transition-all">Send</button>
+  </form>
+</div>
+
+<!-- Shared full-screen view -->
+<div id="pageView" class="fixed inset-0 z-[70] bg-background flex flex-col" hidden>
+  <header class="w-full h-14 px-2 bg-slate-surface sticky top-0 flex items-center gap-2 shadow-sm flex-shrink-0 border-b border-slate-border/50">
+    <button id="pageViewBack" aria-label="Back" class="w-10 h-10 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container active:scale-95 transition-all">
+      <span class="material-symbols-outlined text-[22px]">arrow_back</span>
+    </button>
+    <span id="pageViewTitle" class="font-headline-sm text-headline-sm font-semibold"></span>
+    <div id="pageViewActions" class="ml-auto flex items-center gap-1"></div>
+  </header>
+  <div id="pageViewBody" class="flex-1 overflow-y-auto flex flex-col"></div>
+</div>
+
+<script type="module" src="./feed.js"></script>
+</body>
+</html>
