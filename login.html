@@ -10,18 +10,31 @@
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Hind+Siliguri:wght@400;500;600&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script>
+    /* apply the saved theme before the page is drawn (no white flash in dark mode) */
+    (function () {
+      try {
+        var m = localStorage.getItem("fz-theme");
+        if (m === "dark" || (m !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+          document.documentElement.classList.add("dark");
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="theme.css"/>
 <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
 <script>
   tailwind.config = {
+    darkMode: "class",
     theme: {
       extend: {
         colors: {
-          "primary": "#004ac6", "primary-container": "#2563eb", "primary-fixed": "#dbe1ff",
-          "background": "#f7f9fb", "on-surface": "#191c1e", "on-surface-variant": "#434655",
-          "surface-container": "#eceef0", "surface-container-low": "#f2f4f6",
-          "slate-surface": "#ffffff", "slate-border": "#e2e8f0", "slate-muted": "#64748b", "slate-subtle": "#94a3b8",
-          "error": "#ba1a1a", "error-container": "#ffdad6", "on-error-container": "#93000a",
-          "online-emerald": "#10b981"
+          "primary": "rgb(var(--c-primary) / <alpha-value>)", "primary-container": "rgb(var(--c-primary-container) / <alpha-value>)", "primary-fixed": "rgb(var(--c-primary-fixed) / <alpha-value>)",
+          "background": "rgb(var(--c-background) / <alpha-value>)", "on-surface": "rgb(var(--c-on-surface) / <alpha-value>)", "on-surface-variant": "rgb(var(--c-on-surface-variant) / <alpha-value>)",
+          "surface-container": "rgb(var(--c-surface-container) / <alpha-value>)", "surface-container-low": "rgb(var(--c-surface-container-low) / <alpha-value>)",
+          "slate-surface": "rgb(var(--c-slate-surface) / <alpha-value>)", "slate-border": "rgb(var(--c-slate-border) / <alpha-value>)", "slate-muted": "rgb(var(--c-slate-muted) / <alpha-value>)", "slate-subtle": "rgb(var(--c-slate-subtle) / <alpha-value>)",
+          "error": "rgb(var(--c-error) / <alpha-value>)", "error-container": "rgb(var(--c-error-container) / <alpha-value>)", "on-error-container": "rgb(var(--c-on-error-container) / <alpha-value>)",
+          "online-emerald": "rgb(var(--c-online-emerald) / <alpha-value>)"
         },
         fontFamily: { sans: ["Inter", "Hind Siliguri", "system-ui", "sans-serif"] }
       }
@@ -33,8 +46,8 @@
     .field {
       @apply w-full bg-surface-container-low border border-transparent rounded-xl py-3 pl-11 pr-3 text-[16px] text-on-surface placeholder:text-slate-subtle outline-none transition-colors;
     }
-    .field:focus { @apply border-primary-container bg-white ring-2 ring-primary-container/15; }
-    .field[aria-invalid="true"] { @apply border-error bg-white ring-2 ring-error/10; }
+    .field:focus { @apply border-primary-container bg-slate-surface ring-2 ring-primary-container/15; }
+    .field[aria-invalid="true"] { @apply border-error bg-slate-surface ring-2 ring-error/10; }
     .field-icon { @apply absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-muted pointer-events-none; }
     .label { @apply block text-[13px] font-semibold text-on-surface mb-1.5; }
     .btn-primary {
