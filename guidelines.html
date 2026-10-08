@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="theme-color" content="#004ac6"/>
+<title>Community Guidelines - FreeZone BD</title>
+<script>
+  (function () {
+    try {
+      var m = localStorage.getItem("fz-theme");
+      if (m === "dark" || (m !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)) document.documentElement.classList.add("dark");
+    } catch (e) {}
+  })();
+</script>
+<link rel="stylesheet" href="legal.css"/>
+</head>
+<body>
+<header class="bar"><div class="bar-in"><span class="brand">FreeZone BD</span><a class="back" href="feed.html" onclick="if(history.length>1&&document.referrer){history.back();return false;}">&larr; Back to app</a></div></header>
+<main>
+  <h1>Community Guidelines</h1>
+  <p class="updated">Last updated: <span data-app="updated"></span></p>
+  <div class="lead">FreeZone BD is a place to connect, share and chat with friends. These guidelines keep it friendly and safe for everyone. If something here is broken, you can report it or block the account.</div>
+  <nav class="toc" aria-label="Contents"><b>Contents</b><ol><li><a href="#s1">Be kind and respectful</a></li><li><a href="#s2">Keep it safe</a></li><li><a href="#s3">Be honest</a></li><li><a href="#s4">Respect privacy</a></li><li><a href="#s5">No spam</a></li><li><a href="#s6">Follow the law</a></li><li><a href="#s7">Your tools</a></li><li><a href="#s8">What happens if rules are broken</a></li><li><a href="#s9">Contact</a></li></ol></nav>
+  <section id="s1"><h2>1. Be kind and respectful</h2><p>Treat others the way you want to be treated. Disagreeing is fine; insulting, bullying or humiliating people is not.</p><ul><li>No harassment, threats or repeated unwanted messages</li><li>No hate speech or attacks on people for their religion, race, gender, disability, nationality or background</li></ul></section><section id="s2"><h2>2. Keep it safe</h2><ul><li>No violence, or content that encourages hurting yourself or others</li><li>No sexual or nude content</li><li>Never post anything that sexualises or endangers children. This leads to immediate removal and may be reported to the authorities</li></ul></section><section id="s3"><h2>3. Be honest</h2><ul><li>No fake accounts and no pretending to be another person, a company or an official</li><li>No scams, fraud or tricks to get money or passwords</li><li>No false information that can cause harm, for example fake news during emergencies</li></ul></section><section id="s4"><h2>4. Respect privacy</h2><ul><li>Do not share other people's private information (phone numbers, addresses, private photos or chats) without their permission</li><li>Do not post photos of others in private moments without consent</li></ul></section><section id="s5"><h2>5. No spam</h2><ul><li>No repeated posts, mass messages or fake likes and follows</li><li>No unwanted advertising or chain messages</li></ul></section><section id="s6"><h2>6. Follow the law</h2><p>Do not use FreeZone BD for anything illegal, including selling illegal items or sharing pirated or stolen material.</p></section><section id="s7"><h2>7. Your tools</h2><ul><li><b>Report</b> a post from its ⋮ menu.</li><li><b>Block</b> an account from its profile or from Settings > Blocked accounts. They are not told, and you will no longer see each other.</li><li><b>Delete</b> your own posts, comments, messages and chats whenever you like.</li></ul></section><section id="s8"><h2>8. What happens if rules are broken</h2><p>Depending on how serious it is, we may remove the content, limit some features, or suspend or delete the account. Serious or repeated breaking of these guidelines can lead to a permanent ban.</p></section><section id="s9"><h2>9. Contact</h2><p>Need help or want to appeal a decision? Reach us through <span data-app="contact">the <b>Report a problem</b> option in Settings</span>.</p></section>
+  <p class="note">This page is a general policy written for FreeZone BD. If you run the app commercially, ask a lawyer in your country to review it.</p>
+  <footer><span>&copy; <span data-app="year"></span> FreeZone BD</span><a href="terms.html">Terms of Service</a><a href="privacy.html">Privacy Policy</a></footer>
+</main>
+<script type="module">
+  import { SUPPORT_EMAIL, LEGAL_UPDATED } from "./app-info.js";
+  document.querySelectorAll('[data-app="updated"]').forEach((el) => (el.textContent = LEGAL_UPDATED));
+  document.querySelectorAll('[data-app="year"]').forEach((el) => (el.textContent = new Date().getFullYear()));
+  if (SUPPORT_EMAIL) {
+    document.querySelectorAll('[data-app="contact"]').forEach((el) => {
+      el.innerHTML = '<a href="mailto:' + SUPPORT_EMAIL + '">' + SUPPORT_EMAIL + '</a>';
+    });
+  }
+</script>
+</body>
+</html>
