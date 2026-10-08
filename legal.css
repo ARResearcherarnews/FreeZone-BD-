@@ -1,0 +1,29 @@
+/* FreeZone BD - shared style of terms.html, privacy.html and guidelines.html */
+html { color-scheme: light; }
+html.dark { color-scheme: dark; }
+:root { --primary:#2563eb; --text:#1e293b; --muted:#64748b; --line:#e2e8f0; --bg:#f8fafc; --card:#fff; }
+:root.dark { --text:#e2e8f0; --muted:#94a3b8; --line:#334155; --bg:#0f172a; --card:#1e293b; --primary:#60a5fa; }
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin:0; font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); line-height:1.65; font-size:15px; }
+.bar { position:sticky; top:0; z-index:5; background:var(--card); border-bottom:1px solid var(--line); }
+.bar-in { max-width:760px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.brand { font-weight:700; letter-spacing:-.01em; }
+.back { color:var(--primary); text-decoration:none; font-weight:600; font-size:14px; }
+main { max-width:760px; margin:0 auto; padding:24px 16px 56px; }
+h1 { font-size:28px; line-height:1.2; margin:8px 0 4px; letter-spacing:-.02em; }
+.updated { color:var(--muted); font-size:13px; margin:0 0 20px; }
+.lead { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; margin:0 0 24px; }
+.toc { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px 18px; margin:0 0 28px; }
+.toc b { display:block; margin-bottom:6px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+.toc ol { margin:0; padding-left:20px; }
+.toc a { color:var(--primary); text-decoration:none; }
+section { margin:0 0 26px; scroll-margin-top:72px; }
+h2 { font-size:18px; margin:0 0 8px; letter-spacing:-.01em; }
+p { margin:0 0 10px; }
+ul { margin:0 0 10px; padding-left:22px; }
+li { margin:0 0 5px; }
+a { color:var(--primary); }
+.note { border-left:4px solid var(--primary); background:var(--card); border-radius:0 12px 12px 0; padding:10px 14px; color:var(--muted); font-size:14px; }
+footer { border-top:1px solid var(--line); margin-top:36px; padding-top:16px; color:var(--muted); font-size:13px; display:flex; flex-wrap:wrap; gap:6px 16px; }
+footer a { color:var(--muted); }
