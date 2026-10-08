@@ -284,17 +284,16 @@ export async function mount(container, ctx = {}) {
     overlay.setAttribute("role", "dialog");
     overlay.setAttribute("aria-label", "New story");
     overlay.innerHTML = `
-      <div class="flex items-center justify-between px-3" style="padding-top:max(0.75rem, env(safe-area-inset-top));">
+      <img src="${previewUrl}" alt="Story preview" class="absolute inset-0 w-full h-full object-cover" />
+      <div class="relative z-10 flex items-center justify-between px-3 pb-8 bg-gradient-to-b from-black/60 to-transparent" style="padding-top:max(0.75rem, env(safe-area-inset-top));">
         <button type="button" class="fz-c-close w-10 h-10 rounded-full flex items-center justify-center text-white hover:bg-white/10" aria-label="Cancel">
           <span class="material-symbols-outlined">close</span>
         </button>
         <span class="text-white font-label-lg text-label-lg">New story</span>
         <span class="w-10"></span>
       </div>
-      <div class="flex-1 min-h-0 flex items-center justify-center p-3">
-        <img src="${previewUrl}" alt="Story preview" class="max-w-full max-h-full object-contain rounded-2xl" />
-      </div>
-      <div class="px-4 pt-2 space-y-3" style="padding-bottom:max(1rem, env(safe-area-inset-bottom));">
+      <div class="flex-1"></div>
+      <div class="relative z-10 px-4 pt-12 space-y-3 bg-gradient-to-t from-black/80 to-transparent" style="padding-bottom:max(1rem, env(safe-area-inset-bottom));">
         <textarea class="fz-c-caption w-full resize-none rounded-2xl bg-white/10 text-white placeholder:text-white/50 px-4 py-3 text-[16px] outline-none focus:bg-white/15" rows="2" maxlength="${CAPTION_MAX}" placeholder="Add a caption (optional)"></textarea>
         <button type="button" class="fz-c-share w-full py-3 rounded-xl bg-primary-container text-white font-label-lg text-label-lg font-semibold active:scale-[.98] transition-all disabled:opacity-60">Share story</button>
       </div>`;
@@ -372,8 +371,8 @@ export async function mount(container, ctx = {}) {
         </div>
       </div>
 
-      <div class="flex-1 min-h-0 relative flex items-center justify-center overflow-hidden">
-        <img class="fz-img max-w-full max-h-full object-contain" alt="" />
+      <div class="absolute inset-0 flex items-center justify-center overflow-hidden bg-black">
+        <img class="fz-img w-full h-full object-cover" alt="" />
         <div class="fz-spinner absolute w-9 h-9 rounded-full border-[3px] border-white/25 border-t-white animate-spin"></div>
       </div>
 
