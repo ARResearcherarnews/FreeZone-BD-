@@ -1,5 +1,7 @@
 // FreeZone BD - Login / Sign up / Forgot password
 import { auth, db } from "./config.js";
+import { initTheme } from "./theme.js";
+initTheme();
 
 import {
   onAuthStateChanged,
@@ -160,7 +162,7 @@ function showView(view, { focus = true } = {}) {
     btn.setAttribute("aria-selected", String(active));
     btn.className =
       "flex-1 py-2.5 rounded-lg text-[14px] font-semibold transition-all " +
-      (active ? "bg-white text-primary shadow-sm" : "text-slate-muted");
+      (active ? "bg-slate-surface text-primary shadow-sm" : "text-slate-muted");
   });
 
   const firstField = { login: loginEmail, signup: signupName, reset: resetEmail }[view];
