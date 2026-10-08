@@ -43,7 +43,7 @@ export function showToast(message) {
   toast.setAttribute("role", "status");
   toast.style.cssText =
     "position:fixed;left:50%;bottom:88px;transform:translateX(-50%);z-index:9999;" +
-    "background:#1e293b;color:#fff;padding:10px 18px;border-radius:9999px;" +
+    "background:#1e293b;color:#fff;border:1px solid rgba(148,163,184,.35);padding:10px 18px;border-radius:9999px;" +
     "font-size:13px;font-weight:500;box-shadow:0 8px 24px rgba(15,23,42,.25);" +
     "max-width:85vw;text-align:center;";
   document.body.appendChild(toast);
@@ -103,20 +103,20 @@ const REPORT_REASONS = [
 ];
 
 // Opens a bottom sheet and resolves with { reason, details } or null if cancelled
-export function openReportDialog() {
+export function openReportDialog({ title = "Report post", question = "Why are you reporting this post?" } = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "fixed inset-0 z-[9998] flex items-end sm:items-center justify-center bg-black/40";
     overlay.innerHTML = `
-      <div class="w-full max-w-lg bg-slate-surface rounded-t-3xl sm:rounded-3xl shadow-2xl max-h-[90vh] flex flex-col" role="dialog" aria-modal="true" aria-label="Report post">
+      <div class="w-full max-w-lg bg-slate-surface rounded-t-3xl sm:rounded-3xl shadow-2xl max-h-[90vh] flex flex-col" role="dialog" aria-modal="true" aria-label="${title}">
         <div class="px-5 pt-5 pb-3 border-b border-slate-border">
           <div class="flex items-center justify-between">
-            <h2 class="font-headline-sm text-headline-sm text-on-surface font-semibold">Report post</h2>
+            <h2 class="font-headline-sm text-headline-sm text-on-surface font-semibold">${title}</h2>
             <button type="button" class="report-close w-8 h-8 rounded-full flex items-center justify-center text-slate-muted hover:bg-surface-container" aria-label="Close">
               <span class="material-symbols-outlined text-[20px]">close</span>
             </button>
           </div>
-          <p class="font-body-md text-body-md text-slate-muted mt-1">Why are you reporting this post?</p>
+          <p class="font-body-md text-body-md text-slate-muted mt-1">${question}</p>
         </div>
 
         <div class="overflow-y-auto px-2 py-2">
@@ -177,24 +177,36 @@ function followChipClasses(following) {
   return FOLLOW_CHIP_BASE + (following ? "bg-surface-container text-slate-muted" : "bg-primary-container/10 text-primary");
 }
 
-// Keeps the Follow / Following button of every visible post by the same author in sync
+// Keeps the Follow button (next to the name) and the Unfollow menu item of every visible post by the same author in sync
 export function updateFollowButtons(authorUid, following) {
   document.querySelectorAll(".follow-chip").forEach((chip) => {
     if (chip.dataset.authorUid !== authorUid) return;
     chip.dataset.following = following ? "1" : "0";
+    if (chip.dataset.variant === "inline") {
+      chip.hidden = following; // once I follow, the button is gone (Unfollow is in the ⋮ menu)
+      return;
+    }
     chip.className = followChipClasses(following);
     chip.querySelector(".follow-chip-label").textContent = following ? "Following" : "Follow";
     chip.querySelector(".follow-chip-icon").textContent = following ? "check" : "add";
   });
+  document.querySelectorAll(".unfollow-btn").forEach((btn) => {
+    if (btn.dataset.authorUid === authorUid) btn.hidden = !following;
+  });
 }
 
-// Keeps the Save/Unsave menu item of every visible card in sync
+// Keeps the Save button under the post and the Save/Unsave menu item of every visible card in sync
 export function updateSaveButtons(postId, saved) {
   document.querySelectorAll(".save-btn").forEach((btn) => {
     if (btn.dataset.postId !== postId) return;
     btn.dataset.saved = saved ? "1" : "0";
-    btn.querySelector(".save-label").textContent = saved ? "Unsave post" : "Save post";
-    btn.querySelector(".save-icon").style.fontVariationSettings = `'FILL' ${saved ? 1 : 0}`;
+    btn.setAttribute("aria-pressed", String(saved));
+    const label = btn.querySelector(".save-label");
+    if (label) label.textContent = saved ? "Unsave post" : "Save post";
+    const icon = btn.querySelector(".save-icon");
+    if (icon) icon.style.fontVariationSettings = `'FILL' ${saved ? 1 : 0}`;
+    const svg = btn.querySelector(".save-svg");
+    if (svg) svg.style.fill = saved ? "currentColor" : "none";
   });
 }
 
@@ -335,8 +347,12 @@ function hashString(text) {
   return (hash >>> 0).toString(36) + text.length.toString(36);
 }
 
-/** Markup of the photo grid: 1 photo = full width, 2 = side by side, 3 = one big and two small, 4 = a 2x2 grid. */
-export function postImagesHtml(urls) {
+/**
+ * Markup of the photo grid: 1 photo = full width, 2 = side by side, 3 = one big and two small, 4 = a 2x2 grid.
+ * options.flat       full-width, no rounded corners or border (the feed card)
+ * options.doubleTap  the card handles taps itself (double tap = like) and adds the heart that pops up
+ */
+export function postImagesHtml(urls, { flat = false, doubleTap = false } = {}) {
   if (!urls || !urls.length) return "";
   const list = urls.slice(0, 4);
   const count = list.length;
@@ -344,9 +360,10 @@ export function postImagesHtml(urls) {
   const key = hashString(list.join("\n"));
   imageSets.set(key, list);
 
+  const singleStyle = flat ? "max-height:min(600px,125vw);" : "";
   const tile = (url, index, extra = "") => `
     <button type="button" class="post-img-tile relative block overflow-hidden bg-surface-container ${extra}" data-img-index="${index}" aria-label="Open photo ${index + 1} of ${count}">
-      <img src="${escapeHtml(url)}" alt="" loading="lazy" class="${count === 1 ? "w-full max-h-[420px] object-cover block" : "absolute inset-0 w-full h-full object-cover"}"
+      <img src="${escapeHtml(url)}" alt="" loading="lazy" class="${count === 1 ? `w-full ${flat ? "" : "max-h-[420px] "}object-cover block` : "absolute inset-0 w-full h-full object-cover"}" ${count === 1 && singleStyle ? `style="${singleStyle}"` : ""}
            onerror="${count === 1 ? "this.closest('.post-images')?.remove();" : "this.closest('.post-img-tile')?.remove();"}" />
     </button>`;
 
@@ -354,45 +371,110 @@ export function postImagesHtml(urls) {
   if (count === 1) {
     inner = tile(list[0], 0, "w-full");
   } else if (count === 2) {
-    inner = `<div class="grid grid-cols-2 grid-rows-1 gap-0.5 aspect-[16/9]">${list.map((url, i) => tile(url, i)).join("")}</div>`;
+    inner = `<div class="grid grid-cols-2 grid-rows-1 gap-0.5 ${flat ? "aspect-[2/1.15]" : "aspect-[16/9]"}">${list.map((url, i) => tile(url, i)).join("")}</div>`;
   } else if (count === 3) {
-    inner = `<div class="grid grid-cols-2 grid-rows-2 gap-0.5 aspect-[4/3]">${tile(list[0], 0, "row-span-2")}${tile(list[1], 1)}${tile(list[2], 2)}</div>`;
+    inner = `<div class="grid ${flat ? "grid-cols-[1.5fr_1fr]" : "grid-cols-2"} grid-rows-2 gap-0.5 aspect-[4/3]">${tile(list[0], 0, "row-span-2")}${tile(list[1], 1)}${tile(list[2], 2)}</div>`;
   } else {
-    inner = `<div class="grid grid-cols-2 grid-rows-2 gap-0.5 aspect-square">${list.map((url, i) => tile(url, i)).join("")}</div>`;
+    inner = `<div class="grid grid-cols-2 grid-rows-2 gap-0.5 ${flat ? "aspect-[4/3.2]" : "aspect-square"}">${list.map((url, i) => tile(url, i)).join("")}</div>`;
   }
 
-  return `<div class="post-images rounded-xl overflow-hidden border border-slate-border bg-surface-container mt-1" data-set="${key}">${inner}</div>`;
+  const frame = flat ? "relative overflow-hidden bg-slate-surface" : "rounded-xl overflow-hidden border border-slate-border bg-surface-container mt-1";
+  const burst = doubleTap
+    ? `<div class="fz-burst" aria-hidden="true"><svg viewBox="0 0 24 24" fill="#fff"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.6 8.2 3.4 5 6.6 5c2 0 3.6 1.2 5.4 3.3C13.8 6.2 15.4 5 17.4 5c3.2 0 5 3.2 3.9 6.3-1.8 4.6-9.3 9.2-9.3 9.2z"/></svg></div>`
+    : "";
+  return `<div class="post-images relative ${frame}" data-set="${key}" ${doubleTap ? 'data-double-tap="1"' : ""}>${inner}${burst}</div>`;
+}
+
+/** Saves a picture to the phone. Fetches the picture and downloads it as a file; if the browser blocks that, a hint is shown. */
+export async function downloadImage(url, filename = "") {
+  try {
+    const response = await fetch(url, { mode: "cors" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const blob = await response.blob();
+    const ext = (blob.type.split("/")[1] || "jpg").replace("jpeg", "jpg").replace(/[^a-z0-9]/gi, "") || "jpg";
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = filename || `freezone-${Date.now()}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 5000);
+    showToast("Photo saved");
+    return true;
+  } catch (error) {
+    console.warn("Save photo:", error);
+    showToast("Could not save it here. Press and hold the photo to save it.");
+    return false;
+  }
 }
 
 /** Full-screen photo viewer: swipe or use the arrows to move between the photos, swipe down or tap X to close. */
-export function openImageViewer(urls, startIndex = 0) {
+const viewerContexts = new Map();
+
+// Facebook-style full-screen photo viewer. `ctx` (optional) = { post, isLiked(), likeCount(), commentCount(),
+// toggleLike(), onComments(), onShare(), onReport() }; without it only the photo is shown.
+export function openImageViewer(urls, startIndex = 0, ctx = null) {
   if (!urls || !urls.length) return;
   let index = Math.min(Math.max(startIndex, 0), urls.length - 1);
+  const post = ctx && ctx.post;
 
   const overlay = document.createElement("div");
-  overlay.className = "fixed inset-0 z-[9996] bg-black flex flex-col select-none touch-none";
+  overlay.className = "fixed inset-0 z-[9996] bg-black flex flex-col select-none";
   overlay.setAttribute("role", "dialog");
   overlay.setAttribute("aria-label", "Photo viewer");
+  const pill =
+    "flex-1 h-11 rounded-full bg-white/15 text-white flex items-center justify-center gap-2 font-semibold text-[14px] tabular-nums active:bg-white/25";
+  const footer = post
+    ? `<div class="iv-footer px-4 pt-3 text-white" style="padding-bottom:max(0.75rem, env(safe-area-inset-bottom));">
+        <div class="flex items-center gap-3">
+          <span class="iv-avatar shrink-0"></span>
+          <div class="min-w-0">
+            <div class="font-semibold text-[15px] truncate">${escapeHtml(post.name || "")}</div>
+            <div class="text-white/60 text-[12px]">${escapeHtml(timeAgo(post.createdAt))}</div>
+          </div>
+        </div>
+        ${
+          post.text
+            ? `<div class="mt-2 text-[14px] leading-snug text-white/95"><span class="iv-text iv-clamp break-words whitespace-pre-wrap">${escapeHtml(post.text)}</span> <button type="button" class="iv-more text-white/70 font-semibold" hidden>${TEXT_SEE_MORE}</button></div>`
+            : ""
+        }
+        <div class="mt-3 flex items-center justify-between text-white/80 text-[13px]">
+          <span class="iv-summary-likes flex items-center gap-1"></span>
+          <span class="iv-summary-comments"></span>
+        </div>
+        <div class="mt-3 flex gap-2">
+          <button type="button" class="iv-like ${pill}"><span class="iv-like-icon material-symbols-outlined">favorite</span><span class="iv-like-n"></span></button>
+          <button type="button" class="iv-comment ${pill}"><span class="material-symbols-outlined">chat_bubble</span><span class="iv-comment-n"></span></button>
+          <button type="button" class="iv-share ${pill}"><span class="material-symbols-outlined">share</span></button>
+        </div>
+      </div>`
+    : `<div style="height:max(0.75rem, env(safe-area-inset-bottom));"></div>`;
+
   overlay.innerHTML = `
-    <div class="flex items-center justify-between px-3" style="padding-top:max(0.75rem, env(safe-area-inset-top));">
-      <span class="iv-count text-white/90 font-label-md text-label-md px-2"></span>
-      <button type="button" class="iv-close w-10 h-10 rounded-full flex items-center justify-center text-white hover:bg-white/10" aria-label="Close">
-        <span class="material-symbols-outlined">close</span>
-      </button>
+    <style>.iv-clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.iv-heart-on{font-variation-settings:'FILL' 1;color:#ff3b5c}</style>
+    <div class="flex items-center justify-between px-2 relative" style="padding-top:max(0.5rem, env(safe-area-inset-top));">
+      <button type="button" class="iv-close w-11 h-11 rounded-full flex items-center justify-center text-white active:bg-white/10" aria-label="Close"><span class="material-symbols-outlined">close</span></button>
+      <span class="iv-count text-white/90 text-[13px]"></span>
+      <button type="button" class="iv-menu-btn w-11 h-11 rounded-full flex items-center justify-center text-white active:bg-white/10" aria-label="More"><span class="material-symbols-outlined">more_vert</span></button>
+      <div class="iv-menu absolute right-2 top-full z-10 min-w-[190px] rounded-xl bg-[#242526] text-white shadow-xl py-1" hidden></div>
     </div>
-    <div class="iv-stage flex-1 min-h-0 relative flex items-center justify-center" style="padding-bottom:max(0.75rem, env(safe-area-inset-bottom));">
-      <img class="iv-img max-w-full max-h-full object-contain" alt="" />
+    <div class="iv-stage flex-1 min-h-0 relative flex items-center justify-center overflow-hidden" style="touch-action:pan-y;">
+      <img class="iv-img w-full max-h-full object-contain" alt="" draggable="false" />
       ${
         urls.length > 1
           ? `<button type="button" class="iv-prev absolute left-2 w-10 h-10 rounded-full bg-black/40 text-white flex items-center justify-center" aria-label="Previous photo"><span class="material-symbols-outlined">chevron_left</span></button>
              <button type="button" class="iv-next absolute right-2 w-10 h-10 rounded-full bg-black/40 text-white flex items-center justify-center" aria-label="Next photo"><span class="material-symbols-outlined">chevron_right</span></button>`
           : ""
       }
-    </div>`;
+    </div>
+    ${footer}`;
 
-  const imgEl = overlay.querySelector(".iv-img");
-  const countEl = overlay.querySelector(".iv-count");
-  const stage = overlay.querySelector(".iv-stage");
+  const $ = (sel) => overlay.querySelector(sel);
+  const imgEl = $(".iv-img");
+  const countEl = $(".iv-count");
+  const stage = $(".iv-stage");
+  const menu = $(".iv-menu");
 
   const show = () => {
     imgEl.src = urls[index];
@@ -415,10 +497,77 @@ export function openImageViewer(urls, startIndex = 0) {
   };
   document.addEventListener("keydown", onKey);
 
-  overlay.querySelector(".iv-close").addEventListener("click", close);
-  overlay.querySelector(".iv-prev")?.addEventListener("click", () => move(-1));
-  overlay.querySelector(".iv-next")?.addEventListener("click", () => move(1));
+  $(".iv-close").addEventListener("click", close);
+  $(".iv-prev")?.addEventListener("click", () => move(-1));
+  $(".iv-next")?.addEventListener("click", () => move(1));
 
+  // ⋮ menu
+  const items = [
+    ["download", "Save photo", () => downloadImage(urls[index])],
+  ];
+  if (post) {
+    items.unshift(["link", "Copy link", () => copyPostLink(post.id)]);
+    if (ctx.onShare) items.push(["share", "Share", () => ctx.onShare()]);
+    if (ctx.onReport) items.push(["flag", "Report", () => { close(); ctx.onReport(); }]);
+  }
+  menu.innerHTML = items
+    .map(([icon, label], i) => `<button type="button" data-i="${i}" class="w-full flex items-center gap-3 px-4 h-11 text-left text-[14px] active:bg-white/10"><span class="material-symbols-outlined text-[20px]">${icon}</span>${label}</button>`)
+    .join("");
+  $(".iv-menu-btn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    menu.hidden = !menu.hidden;
+  });
+  menu.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-i]");
+    if (!btn) return;
+    menu.hidden = true;
+    items[Number(btn.dataset.i)][2]();
+  });
+  overlay.addEventListener("click", (e) => {
+    if (!e.target.closest(".iv-menu") && !e.target.closest(".iv-menu-btn")) menu.hidden = true;
+  });
+
+  // Footer (author, caption, counts, actions)
+  if (post) {
+    const avatarSlot = $(".iv-avatar");
+    avatarSlot.innerHTML = avatarHtml(post.photoURL, "w-10 h-10");
+    const more = $(".iv-more");
+    const textEl = $(".iv-text");
+    if (more && textEl) {
+      requestAnimationFrame(() => {
+        if (textEl.scrollHeight > textEl.clientHeight + 1) more.hidden = false;
+      });
+      more.addEventListener("click", () => {
+        textEl.classList.remove("iv-clamp");
+        more.hidden = true;
+      });
+    }
+    const fmt = (n) => (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, "") + "K" : String(n));
+    const refresh = () => {
+      const liked = ctx.isLiked();
+      const likes = ctx.likeCount();
+      const comments = ctx.commentCount();
+      $(".iv-like-icon").classList.toggle("iv-heart-on", liked);
+      $(".iv-like-n").textContent = fmt(likes);
+      $(".iv-comment-n").textContent = fmt(comments);
+      $(".iv-summary-likes").innerHTML = likes
+        ? `<span class="material-symbols-outlined iv-heart-on text-[18px]">favorite</span>${fmt(likes)}`
+        : "";
+      $(".iv-summary-comments").textContent = comments ? `${fmt(comments)} comments` : "";
+    };
+    refresh();
+    $(".iv-like").addEventListener("click", () => {
+      ctx.toggleLike();
+      refresh();
+    });
+    $(".iv-comment").addEventListener("click", () => {
+      close();
+      ctx.onComments?.();
+    });
+    $(".iv-share").addEventListener("click", () => ctx.onShare?.());
+  }
+
+  // Swipe: sideways = next/previous photo, down = close
   let startX = 0;
   let startY = 0;
   stage.addEventListener("pointerdown", (event) => {
@@ -428,8 +577,8 @@ export function openImageViewer(urls, startIndex = 0) {
   stage.addEventListener("pointerup", (event) => {
     const dx = event.clientX - startX;
     const dy = event.clientY - startY;
-    if (dy > 90 && dy > Math.abs(dx)) return close(); // swipe down
-    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) move(dx < 0 ? 1 : -1); // swipe sideways
+    if (dy > 90 && dy > Math.abs(dx)) return close();
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) move(dx < 0 ? 1 : -1);
   });
 
   document.body.appendChild(overlay);
@@ -443,11 +592,12 @@ document.addEventListener(
   (event) => {
     const tile = event.target.closest(".post-images [data-img-index]");
     if (!tile) return;
+    if (tile.closest(".post-images").dataset.doubleTap) return; // the feed card handles taps itself (double tap = like)
     const urls = imageSets.get(tile.closest(".post-images").dataset.set);
     if (!urls || !urls.length) return;
     event.stopPropagation();
     event.preventDefault();
-    openImageViewer(urls, Number(tile.dataset.imgIndex) || 0);
+    openImageViewer(urls, Number(tile.dataset.imgIndex) || 0, viewerContexts.get(tile.closest(".post-images").dataset.set));
   },
   true
 );
@@ -463,54 +613,102 @@ function ensureGlobalMenuCloser() {
   });
 }
 
+/* ---------------------------------------------------------------
+   The post card (Feed, profile). Flat and full width: header, text, photos, actions, last comment.
+---------------------------------------------------------------- */
+const TEXT_SEE_MORE = "আরও দেখুন";
+const textViewAllComments = (count) => `সব ${count}টি কমেন্ট দেখুন`;
+
+const CARD_ICONS = {
+  heart: `<svg class="like-svg" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.6 8.2 3.4 5 6.6 5c2 0 3.6 1.2 5.4 3.3C13.8 6.2 15.4 5 17.4 5c3.2 0 5 3.2 3.9 6.3-1.8 4.6-9.3 9.2-9.3 9.2z"/></svg>`,
+  comment: `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-12.4 7.5L3 20.5l1.6-5A8.5 8.5 0 1 1 21 11.5z"/></svg>`,
+  share: `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M21.5 3.5 10.8 14.2M21.5 3.5l-6.6 17-4.1-6.3-6.3-4.1 17-6.6z"/></svg>`,
+  bookmark: (saved) => `<svg class="save-svg" viewBox="0 0 24 24" width="26" height="26" fill="${saved ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h12v17l-6-4.6-6 4.6v-17z"/></svg>`,
+  dots: `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>`
+};
+
+// 1234 -> 1.2K
+function compactCount(n) {
+  n = Number(n) || 0;
+  return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, "") + "K" : String(n);
+}
+
+// The newest comment that I may see (comments of accounts I blocked are skipped)
+function latestComment(post, isBlockedUid) {
+  if (!post.comments || typeof post.comments !== "object") return null;
+  let latest = null;
+  Object.values(post.comments).forEach((comment) => {
+    if (!comment || !comment.text) return;
+    if (isBlockedUid && comment.uid && isBlockedUid(comment.uid)) return;
+    if (!latest || (comment.createdAt || 0) > (latest.createdAt || 0)) latest = comment;
+  });
+  return latest;
+}
+
+const ACT_BTN =
+  "flex items-center gap-1.5 h-11 px-2 rounded-full text-on-surface font-semibold text-[14px] tabular-nums active:bg-surface-container transition-colors";
+
 export function createPostCard(post, options = {}) {
-  const { currentUserUid, savedPostIds, followingIds, onOpen, onLike, onShare, onDelete, onEdit, onReport, onSave, onFollow, onProfile, onBlock, showFollowChip = true } = options;
+  const { currentUserUid, savedPostIds, followingIds, onOpen, onComments, onLike, onShare, onDelete, onEdit, onReport, onSave, onFollow, onProfile, onBlock, isBlocked: isBlockedUid, showFollowChip = true } = options;
 
   const likedByMe = !!(post.likes && currentUserUid && post.likes[currentUserUid]);
   const likesCount = post.likesCount || 0;
   const commentsCount = post.commentsCount || 0;
   const isOwner = !!(currentUserUid && post.uid === currentUserUid);
-  let isSaved = !!(savedPostIds && savedPostIds[post.id]);
+  const isSaved = !!(savedPostIds && savedPostIds[post.id]);
   const canFollow = !!(onFollow && currentUserUid && post.uid && post.uid !== currentUserUid);
   const canBlock = !!(onBlock && currentUserUid && post.uid && post.uid !== currentUserUid);
   const isFollowing = !!(followingIds && followingIds[post.uid]);
   const followHandle = post.username ? `@${post.username}` : post.name || "this user";
+  const showFollow = canFollow && showFollowChip;
 
   const article = document.createElement("article");
-  article.className =
-    "group bg-slate-surface border border-slate-border rounded-2xl p-4 shadow-sm hover:shadow-md transition-all duration-200 cursor-pointer active:scale-[0.995]";
+  article.className = "bg-slate-surface border-y border-slate-border";
   article.dataset.postId = post.id;
 
-  const imageBlock = postImagesHtml(postImageUrls(post));
+  const imageUrls = postImageUrls(post);
+  const imageBlock = postImagesHtml(imageUrls, { flat: true, doubleTap: true });
+
+  // Short text without photos is shown larger, like a status
+  const text = post.text || "";
+  const bigText = !imageUrls.length && text.length > 0 && text.length <= 110 && text.split("\n").length <= 2;
+  const textBlock = text
+    ? `<p class="post-text ${bigText ? "text-[20px] leading-7 font-medium" : "text-[15px] leading-[22px]"} text-on-surface whitespace-pre-wrap break-words mx-4 mb-2.5" style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${escapeHtml(text)}</p>
+       <button type="button" class="more-btn block px-4 -mt-1 mb-2.5 text-slate-muted font-semibold text-[14px] text-left" hidden>${TEXT_SEE_MORE}</button>`
+    : "";
+
+  const last = latestComment(post, isBlockedUid);
+  const lastName = last ? (last.username ? `@${last.username}` : last.name || "FreeZone User") : "";
+  const commentsBlock =
+    commentsCount > 1 || last
+      ? `<div class="px-4 pb-3.5 space-y-0.5">
+           ${commentsCount > 1 ? `<button type="button" class="view-comments block text-slate-muted text-[14px] text-left">${textViewAllComments(commentsCount)}</button>` : ""}
+           ${last ? `<p class="text-[14px] leading-5 text-on-surface break-words" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;"><span class="font-semibold">${escapeHtml(lastName)}</span> ${escapeHtml(last.text)}</p>` : ""}
+         </div>`
+      : `<div class="h-3"></div>`;
 
   article.innerHTML = `
-    <div class="flex items-start justify-between gap-2">
-      <div class="profile-link flex items-center gap-3 min-w-0 ${onProfile && post.uid ? "cursor-pointer" : ""}">
-        ${avatarHtml(post.photoURL)}
-        <div class="min-w-0">
-          <div class="font-headline-sm text-headline-sm text-on-surface font-semibold truncate">${escapeHtml(post.name || "FreeZone User")}</div>
-          <div class="flex items-center gap-1.5 text-slate-muted font-body-sm text-body-sm flex-wrap">
-            ${post.username ? `<span class="text-primary/80">@${escapeHtml(post.username)}</span><span class="text-slate-border">•</span>` : ""}
-            <span>${timeAgo(post.createdAt)}</span>
-            ${post.editedAt ? `<span class="text-slate-border">•</span><span class="italic">edited</span>` : ""}
+    <div class="flex items-center gap-2 pl-4 pr-2 pt-3 pb-2.5">
+      <div class="profile-link flex items-center gap-2.5 min-w-0 flex-1 ${onProfile && post.uid ? "cursor-pointer" : ""}">
+        ${avatarHtml(post.photoURL, "w-10 h-10")}
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span class="font-semibold text-[15px] leading-5 text-on-surface truncate min-w-0">${escapeHtml(post.name || "FreeZone User")}</span>
+            ${
+              showFollow
+                ? `<button type="button" class="follow-chip flex-shrink-0 flex items-center text-primary font-bold text-[14px] px-1 -ml-0.5 active:opacity-60" data-variant="inline" data-author-uid="${escapeHtml(post.uid)}" data-handle="${escapeHtml(followHandle)}" data-following="${isFollowing ? "1" : "0"}" aria-label="Follow ${escapeHtml(followHandle)}" ${isFollowing ? "hidden" : ""}>
+                     <span class="text-slate-subtle font-normal mr-1.5" aria-hidden="true">·</span><span class="follow-chip-label">Follow</span>
+                   </button>`
+                : ""
+            }
           </div>
+          <div class="text-slate-muted text-[13px] leading-[18px] truncate">${post.username ? `@${escapeHtml(post.username)} · ` : ""}${timeAgo(post.createdAt)}${post.editedAt ? " · edited" : ""}</div>
         </div>
       </div>
 
-      ${
-        canFollow && showFollowChip
-          ? `<button type="button" class="${followChipClasses(isFollowing)}" data-author-uid="${escapeHtml(post.uid)}" data-handle="${escapeHtml(followHandle)}" data-following="${isFollowing ? "1" : "0"}" aria-label="Follow or unfollow ${escapeHtml(followHandle)}">
-               <span class="follow-chip-icon material-symbols-outlined text-[16px]">${isFollowing ? "check" : "add"}</span>
-               <span class="follow-chip-label">${isFollowing ? "Following" : "Follow"}</span>
-             </button>`
-          : ""
-      }
-
       <div class="relative menu-wrap flex-shrink-0">
-        <button class="menu-btn w-8 h-8 rounded-full flex items-center justify-center text-slate-muted hover:bg-surface-container hover:text-on-surface active:scale-95 transition-all" aria-label="More options">
-          <span class="material-symbols-outlined text-[20px]">more_horiz</span>
-        </button>
-        <div class="menu-dropdown absolute right-0 top-9 z-20 w-48 bg-slate-surface border border-slate-border rounded-xl shadow-xl py-1.5 overflow-hidden" hidden>
+        <button class="menu-btn w-10 h-10 rounded-full flex items-center justify-center text-slate-muted hover:bg-surface-container active:bg-surface-container transition-colors" aria-label="More options">${CARD_ICONS.dots}</button>
+        <div class="menu-dropdown absolute right-0 top-10 z-20 w-52 bg-slate-surface border border-slate-border rounded-xl shadow-xl py-1.5 overflow-hidden" hidden>
           <button class="copy-link-btn w-full text-left px-3.5 py-2.5 text-sm text-on-surface hover:bg-surface-container-low flex items-center gap-2.5">
             <span class="material-symbols-outlined text-[18px]">link</span> Copy link
           </button>
@@ -519,6 +717,13 @@ export function createPostCard(post, options = {}) {
               ? `<button class="save-btn w-full text-left px-3.5 py-2.5 text-sm text-on-surface hover:bg-surface-container-low flex items-center gap-2.5" data-post-id="${escapeHtml(post.id)}" data-saved="${isSaved ? "1" : "0"}">
                    <span class="save-icon material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' ${isSaved ? 1 : 0};">bookmark</span>
                    <span class="save-label">${isSaved ? "Unsave post" : "Save post"}</span>
+                 </button>`
+              : ""
+          }
+          ${
+            showFollow
+              ? `<button class="unfollow-btn w-full text-left px-3.5 py-2.5 text-sm text-on-surface hover:bg-surface-container-low flex items-center gap-2.5" data-author-uid="${escapeHtml(post.uid)}" ${isFollowing ? "" : "hidden"}>
+                   <span class="material-symbols-outlined text-[18px]">person_remove</span> <span class="truncate">Unfollow ${escapeHtml(followHandle)}</span>
                  </button>`
               : ""
           }
@@ -548,9 +753,9 @@ export function createPostCard(post, options = {}) {
       </div>
     </div>
 
-    <p class="post-text font-body-md text-body-md text-on-surface leading-relaxed whitespace-pre-wrap break-words mt-3">${escapeHtml(post.text)}</p>
+    ${textBlock}
 
-    <div class="edit-wrap space-y-2.5 mt-3" hidden>
+    <div class="edit-wrap space-y-2.5 mx-4 mb-3" hidden>
       <textarea class="edit-textarea w-full bg-surface-container-low border border-transparent focus:border-primary-container focus:ring-2 focus:ring-primary-container/20 rounded-xl px-3.5 py-2.5 text-body-md text-body-md outline-none resize-none transition-all" rows="3" maxlength="500">${escapeHtml(post.text)}</textarea>
       <div class="flex items-center justify-between">
         <span class="edit-char-count text-slate-subtle font-label-sm text-label-sm">0/500</span>
@@ -563,45 +768,114 @@ export function createPostCard(post, options = {}) {
 
     ${imageBlock}
 
-    <div class="flex items-center justify-between py-2 mt-1 text-slate-muted font-body-sm text-body-sm border-b border-slate-border/70">
-      <span class="likes-count">${likesCount} like${likesCount === 1 ? "" : "s"}</span>
-      <span>${commentsCount} comment${commentsCount === 1 ? "" : "s"}</span>
+    <div class="flex items-center px-2 pt-1">
+      <button type="button" class="like-btn ${ACT_BTN} ${likedByMe ? "text-notification-rose liked" : ""}" aria-label="Like" aria-pressed="${likedByMe}">
+        ${CARD_ICONS.heart}<span class="like-count">${compactCount(likesCount)}</span>
+      </button>
+      <button type="button" class="comment-btn ${ACT_BTN}" aria-label="Comments">
+        ${CARD_ICONS.comment}<span>${compactCount(commentsCount)}</span>
+      </button>
+      <button type="button" class="share-btn ${ACT_BTN}" aria-label="Share">${CARD_ICONS.share}</button>
+      <span class="flex-1"></span>
+      ${
+        onSave
+          ? `<button type="button" class="save-btn ${ACT_BTN}" data-post-id="${escapeHtml(post.id)}" data-saved="${isSaved ? "1" : "0"}" aria-label="Save post" aria-pressed="${isSaved}">${CARD_ICONS.bookmark(isSaved)}</button>`
+          : ""
+      }
     </div>
 
-    <div class="flex items-center justify-between pt-1">
-      <button class="like-btn flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl font-label-md text-label-md font-semibold hover:bg-surface-container active:scale-95 transition-all ${likedByMe ? "text-primary-container liked" : "text-slate-muted"}">
-        <span class="material-symbols-outlined text-[20px] like-icon transition-transform">thumb_up</span>
-        <span class="like-label">${likedByMe ? "Liked" : "Like"}</span>
-      </button>
-      <button class="comment-btn flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-slate-muted hover:text-on-surface font-label-md text-label-md font-medium hover:bg-surface-container active:scale-95 transition-all">
-        <span class="material-symbols-outlined text-[20px]">chat_bubble</span>
-        <span>Comment</span>
-      </button>
-      <button class="share-btn flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-slate-muted hover:text-on-surface font-label-md text-label-md font-medium hover:bg-surface-container active:scale-95 transition-all">
-        <span class="material-symbols-outlined text-[20px]">share</span>
-        <span>Share</span>
-      </button>
-    </div>
+    ${commentsBlock}
   `;
 
+  // The heart of a liked post is filled
   const likeBtn = article.querySelector(".like-btn");
+  const likeSvg = likeBtn.querySelector(".like-svg");
+  const likeCountEl = likeBtn.querySelector(".like-count");
+  if (likedByMe) likeSvg.style.fill = "currentColor";
+
+  // Likes show at once; the database confirms a moment later (the feed redraws with the saved value)
+  let liked = likedByMe;
+  let likeTotal = likesCount;
+  const toggleLikeNow = () => {
+    liked = !liked;
+    likeTotal = Math.max(0, likeTotal + (liked ? 1 : -1));
+    likeBtn.classList.toggle("liked", liked);
+    likeBtn.classList.toggle("text-notification-rose", liked);
+    likeBtn.setAttribute("aria-pressed", String(liked));
+    likeSvg.style.fill = liked ? "currentColor" : "none";
+    likeCountEl.textContent = compactCount(likeTotal);
+    likeBtn.classList.remove("pop");
+    void likeBtn.offsetWidth;
+    likeBtn.classList.add("pop");
+    onLike?.(post.id);
+  };
+
   likeBtn.addEventListener("click", (event) => {
     event.stopPropagation();
-    const icon = likeBtn.querySelector(".like-icon");
-    icon.style.transform = "scale(1.25)";
-    setTimeout(() => (icon.style.transform = ""), 180);
-    onLike?.(post.id);
+    toggleLikeNow();
   });
 
-  article.querySelector(".comment-btn").addEventListener("click", (event) => {
+  // What the full-screen photo viewer needs to show and act on this post
+  const photoSet = article.querySelector(".post-images");
+  if (photoSet) {
+    viewerContexts.set(photoSet.dataset.set, {
+      post,
+      isLiked: () => liked,
+      likeCount: () => likeTotal,
+      commentCount: () => commentsCount,
+      toggleLike: toggleLikeNow,
+      onComments: () => (onComments || onOpen)?.(post.id),
+      onShare: () => onShare?.(post),
+      onReport: onReport ? async () => { const result = await openReportDialog(); if (result) onReport(post, result); } : null,
+    });
+  }
+
+  // Comment button and "View all comments": the comments sheet (falls back to the post page)
+  const openCommentsNow = (event) => {
     event.stopPropagation();
-    onOpen?.(post.id);
-  });
+    (onComments || onOpen)?.(post.id);
+  };
+  article.querySelector(".comment-btn").addEventListener("click", openCommentsNow);
+  const viewComments = article.querySelector(".view-comments");
+  if (viewComments) viewComments.addEventListener("click", openCommentsNow);
 
   article.querySelector(".share-btn").addEventListener("click", (event) => {
     event.stopPropagation();
     onShare?.(post);
   });
+
+  // Photos: one tap opens the viewer, a double tap likes the post (never un-likes it)
+  const imagesEl = article.querySelector(".post-images");
+  if (imagesEl) {
+    const burst = imagesEl.querySelector(".fz-burst");
+    let lastTap = 0;
+    let tapTimer = null;
+    imagesEl.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        clearTimeout(tapTimer);
+        tapTimer = null;
+        lastTap = 0;
+        if (burst) {
+          burst.classList.remove("go");
+          void burst.offsetWidth;
+          burst.classList.add("go");
+        }
+        if (!liked) toggleLikeNow();
+        return;
+      }
+      lastTap = now;
+      const tile = event.target.closest("[data-img-index]");
+      const index = tile ? Number(tile.dataset.imgIndex) || 0 : 0;
+      tapTimer = setTimeout(() => {
+        tapTimer = null;
+        lastTap = 0;
+        const urls = imageSets.get(imagesEl.dataset.set);
+        if (urls && urls.length) openImageViewer(urls, index, viewerContexts.get(imagesEl.dataset.set));
+      }, 300);
+    });
+  }
 
   const menuBtn = article.querySelector(".menu-btn");
   const menuDropdown = article.querySelector(".menu-dropdown");
@@ -630,21 +904,28 @@ export function createPostCard(post, options = {}) {
     });
   }
 
+  // Follow (next to the name; it disappears once I follow) and Unfollow (in the ⋮ menu)
   const followChip = article.querySelector(".follow-chip");
   if (followChip) {
     followChip.addEventListener("click", async (event) => {
       event.stopPropagation();
-      const currentlyFollowing = followChip.dataset.following === "1";
-      if (currentlyFollowing && !confirm(`Unfollow ${followHandle}?`)) return;
-
       followChip.disabled = true;
-      await onFollow(post, currentlyFollowing); // on success updateFollowButtons() refreshes every chip of this author
+      await onFollow(post, false); // on success updateFollowButtons() refreshes every card of this author
       followChip.disabled = false;
     });
   }
+  const unfollowBtn = article.querySelector(".unfollow-btn");
+  if (unfollowBtn) {
+    unfollowBtn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      menuDropdown.hidden = true;
+      if (!confirm(`Unfollow ${followHandle}?`)) return;
+      await onFollow(post, true);
+    });
+  }
 
-  const saveBtn = article.querySelector(".save-btn");
-  if (saveBtn) {
+  // Save: the bookmark under the post and the item in the ⋮ menu do the same thing
+  article.querySelectorAll(".save-btn").forEach((saveBtn) => {
     saveBtn.addEventListener("click", async (event) => {
       event.stopPropagation();
       menuDropdown.hidden = true;
@@ -652,7 +933,7 @@ export function createPostCard(post, options = {}) {
       const ok = await onSave(post, wasSaved);
       if (ok) updateSaveButtons(post.id, !wasSaved);
     });
-  }
+  });
 
   const blockBtn = article.querySelector(".block-btn");
   if (blockBtn) {
@@ -682,7 +963,26 @@ export function createPostCard(post, options = {}) {
     });
   }
 
+  // Long text: three lines, then "See more"
   const postTextEl = article.querySelector(".post-text");
+  const moreBtn = article.querySelector(".more-btn");
+  let expanded = false;
+  const checkClamp = () => {
+    if (!postTextEl || !moreBtn || expanded || postTextEl.hidden) return;
+    moreBtn.hidden = !(postTextEl.scrollHeight > postTextEl.clientHeight + 2);
+  };
+  if (postTextEl && moreBtn) {
+    if ("ResizeObserver" in window) new ResizeObserver(checkClamp).observe(postTextEl);
+    else requestAnimationFrame(checkClamp);
+
+    moreBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      expanded = true;
+      postTextEl.style.cssText = "";
+      moreBtn.hidden = true;
+    });
+  }
+
   const editWrap = article.querySelector(".edit-wrap");
   const editBtn = article.querySelector(".edit-btn");
 
@@ -697,7 +997,8 @@ export function createPostCard(post, options = {}) {
     };
 
     const enterEditMode = () => {
-      postTextEl.hidden = true;
+      if (postTextEl) postTextEl.hidden = true;
+      if (moreBtn) moreBtn.hidden = true;
       editWrap.hidden = false;
       editTextarea.value = post.text || "";
       updateCharCount();
@@ -705,8 +1006,9 @@ export function createPostCard(post, options = {}) {
     };
 
     const exitEditMode = () => {
-      postTextEl.hidden = false;
+      if (postTextEl) postTextEl.hidden = false;
       editWrap.hidden = true;
+      checkClamp();
     };
 
     editBtn.addEventListener("click", (event) => {
@@ -740,8 +1042,6 @@ export function createPostCard(post, options = {}) {
       }
     });
   }
-
-  article.addEventListener("click", () => onOpen?.(post.id));
 
   return article;
 }
