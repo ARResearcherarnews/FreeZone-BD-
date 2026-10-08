@@ -3,7 +3,13 @@
 //
 // Data (Firebase Realtime Database):
 //   chats/{chatId}/members/{uid}          = true
-//   chats/{chatId}/messages/{messageId}   = { from, text, createdAt, editedAt?, deleted?, deletedAt? }
+//   chats/{chatId}/messages/{messageId}   = { from, text, createdAt, imageURL?, images?, imgW?, imgH?, replyTo?, forwarded?, editedAt?, deleted?, deletedAt? }
+//     (a photo message: pictures are uploaded to imgbb, only their links are saved; text is the optional caption.
+//      imageURL = first picture; images = all pictures when 2-4 were sent together.
+//      replyTo = { id, from, text?, photo? } the message this one answers; forwarded = true when it was forwarded)
+//   chats/{chatId}/messages/{messageId}/reactions/{uid} = one emoji per person (tap the same emoji again to take it back)
+//   chats/{chatId}/delivered/{uid}        = time (ms) when that person's app last received a message  -> the "Delivered" mark
+//   chats/{chatId}/typing/{uid}           = true while that person is typing
 //   chats/{chatId}/reads/{uid}            = time (ms) when that person last read the chat  -> the "Seen" mark
 //   userChats/{uid}/{chatId}              = { with, lastMessage, lastFrom, lastAt, unread }   <- the inbox of each person
 //   presence/{uid}                        = { online, lastSeen }   <- the green "Active now" dot (only followers can read it)
@@ -23,7 +29,9 @@ import {
   increment
 } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-database.js";
 
-import { escapeHtml, avatarHtml, timeAgo, showToast } from "./post.js";
+import { escapeHtml, avatarHtml, timeAgo, showToast, openImageViewer, downloadImage } from "./post.js";
+import { uploadToImgbb, prepareImage } from "./imgbb.js";
+import { startCall } from "./call.js";
 import { isBlocked, onBlocksChange, blockAccount, unblockAccount, openActionMenu, openBlockedAccounts, getBlockedIds } from "./block.js";
 
 const MESSAGE_MAX = 1000; // characters per message
@@ -105,12 +113,26 @@ function emptyState(icon, title, text) {
 }
 
 // Bottom sheet with a list of actions. Resolves with the chosen key, or null when cancelled.
-function openActionSheet(actions) {
+const REACTIONS = ["❤️", "👍", "😂", "😮", "😢", "🙏"]; // quick emoji reactions on a message
+
+// Resolves with the chosen action key, "react:<emoji>" for an emoji, or null when cancelled.
+// options.emojis = row of emojis on top; options.current = the emoji I already gave (highlighted)
+function openActionSheet(actions, { emojis = [], current = "" } = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "fixed inset-0 z-[9998] flex items-end sm:items-center justify-center bg-black/40";
     overlay.innerHTML = `
       <div class="w-full max-w-lg bg-slate-surface rounded-t-3xl sm:rounded-3xl shadow-2xl p-4 pb-5" role="dialog" aria-modal="true">
+        ${
+          emojis.length
+            ? `<div class="flex items-center justify-between gap-1 mb-2 px-1 py-1.5 rounded-2xl bg-surface-container">${emojis
+                .map(
+                  (emoji) =>
+                    `<button type="button" class="as-emoji flex-1 h-11 rounded-xl text-[26px] leading-none flex items-center justify-center active:scale-90 transition-transform ${emoji === current ? "bg-primary-container/20 ring-2 ring-primary-container" : ""}" data-emoji="${emoji}" aria-label="React ${emoji}" aria-pressed="${emoji === current}">${emoji}</button>`
+                )
+                .join("")}</div>`
+            : ""
+        }
         ${actions
           .map(
             (action) => `
@@ -135,6 +157,8 @@ function openActionSheet(actions) {
     overlay.addEventListener("click", (event) => {
       event.stopPropagation();
       if (event.target === overlay) return close(null);
+      const emoji = event.target.closest(".as-emoji");
+      if (emoji) return close("react:" + emoji.dataset.emoji);
       const action = event.target.closest(".as-action");
       if (action) close(action.dataset.key);
     });
@@ -200,6 +224,93 @@ async function copyText(text) {
   }
 }
 
+/* ---------------------------------------------------------------
+   Photos in a message, quotes and forwarding
+---------------------------------------------------------------- */
+const MAX_PHOTOS = 4; // pictures per message
+
+// The valid picture links of a message (older messages have only imageURL, newer ones may have images)
+function photoUrlsOf(message) {
+  if (!message || message.deleted === true) return [];
+  let list = [];
+  if (Array.isArray(message.images)) list = message.images;
+  else if (message.images && typeof message.images === "object") list = Object.values(message.images);
+  else if (message.imageURL) list = [message.imageURL];
+  return list.filter((url) => typeof url === "string" && url.startsWith("https://")).slice(0, MAX_PHOTOS);
+}
+
+// What a reply stores about the message it answers
+function replyPayload(message) {
+  const payload = { id: message.id, from: message.from };
+  if (message.text) payload.text = String(message.text).slice(0, 150);
+  if (photoUrlsOf(message).length) payload.photo = true;
+  return payload;
+}
+
+// "Forward to..." sheet. people = [{ uid, name, username, photoURL }]. onSend(uid) resolves true when it was sent.
+function openForwardSheet({ people, preview, onSend }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "fixed inset-0 z-[9998] flex items-end sm:items-center justify-center bg-black/40";
+    overlay.innerHTML = `
+      <div class="w-full max-w-lg bg-slate-surface rounded-t-3xl sm:rounded-3xl shadow-2xl p-4 pb-5 flex flex-col" style="max-height:80vh;" role="dialog" aria-modal="true" aria-label="Forward to">
+        <h2 class="font-headline-sm text-headline-sm text-on-surface font-semibold px-1">Forward to</h2>
+        <p class="px-1 mt-0.5 mb-3 text-[13px] text-slate-muted truncate">${escapeHtml(preview)}</p>
+        <input type="search" class="fw-search w-full bg-surface-container rounded-xl px-4 py-2.5 text-[15px] outline-none mb-2" placeholder="Search people" autocomplete="off" />
+        <div class="fw-list flex-1 overflow-y-auto min-h-0">
+          ${
+            people.length
+              ? people
+                  .map(
+                    (person) => `
+            <div class="fw-row flex items-center gap-3 px-1 py-2" data-search="${escapeHtml((person.name + " " + (person.username || "")).toLowerCase())}">
+              ${avatarHtml(person.photoURL, "w-10 h-10")}
+              <div class="min-w-0 flex-1">
+                <div class="font-label-lg text-label-lg text-on-surface truncate">${escapeHtml(person.name)}</div>
+                ${person.username ? `<div class="font-body-sm text-body-sm text-slate-muted truncate">@${escapeHtml(person.username)}</div>` : ""}
+              </div>
+              <button type="button" class="fw-send px-4 py-1.5 rounded-full bg-primary-container text-white font-label-md text-label-md font-semibold active:scale-95 transition-all disabled:opacity-60" data-uid="${escapeHtml(person.uid)}">Send</button>
+            </div>`
+                  )
+                  .join("")
+              : `<p class="text-center text-slate-muted font-body-md text-body-md py-8">No one to forward to yet.</p>`
+          }
+        </div>
+        <button type="button" class="fw-done w-full mt-3 py-2.5 rounded-xl font-label-lg text-label-lg text-on-surface bg-surface-container hover:bg-surface-container-high active:scale-[.98] transition-all">Done</button>
+      </div>`;
+
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKey);
+      resolve();
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("keydown", onKey);
+
+    overlay.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (event.target === overlay || event.target.closest(".fw-done")) return close();
+      const button = event.target.closest(".fw-send");
+      if (!button || button.disabled) return;
+      button.disabled = true;
+      button.textContent = "Sending...";
+      const ok = await onSend(button.dataset.uid);
+      button.textContent = ok ? "Sent" : "Retry";
+      button.disabled = !!ok;
+      if (ok) button.className = button.className.replace("bg-primary-container text-white", "bg-surface-container text-on-surface-variant");
+    });
+    overlay.querySelector(".fw-search").addEventListener("input", (event) => {
+      const term = event.target.value.trim().toLowerCase();
+      overlay.querySelectorAll(".fw-row").forEach((row) => {
+        row.style.display = term && !row.dataset.search.includes(term) ? "none" : ""; // style, not [hidden]: the row has display:flex
+      });
+    });
+    document.body.appendChild(overlay);
+  });
+}
+
 /**
  * Sends one message from `me` to `otherUid` in one atomic update: the message itself, both inboxes and the
  * unread counter of the other person. `extra` adds fields to the message (e.g. the story it replies to).
@@ -239,6 +350,29 @@ function avatarWithStatus(photoURL, size, online, dot = "w-3.5 h-3.5") {
 }
 
 /* ---------------------------------------------------------------
+   "Delivered": when a message reaches this app (open on this phone), the sender is told.
+   startPresence() starts it once after login, so it works on every screen, not only inside the chat.
+---------------------------------------------------------------- */
+function startDelivery(db, me) {
+  const marked = new Map(); // chatId -> lastAt already acknowledged
+  onValue(
+    ref(db, `userChats/${me}`),
+    (snap) => {
+      const updates = {};
+      snap.forEach((child) => {
+        const value = child.val();
+        if (!value || value.lastFrom === me || !value.lastAt) return;
+        if (marked.get(child.key) === value.lastAt) return;
+        marked.set(child.key, value.lastAt);
+        updates[`chats/${child.key}/delivered/${me}`] = serverTimestamp();
+      });
+      if (Object.keys(updates).length) update(ref(db), updates).catch(() => {});
+    },
+    () => {} // no permission or no network: nothing is marked
+  );
+}
+
+/* ---------------------------------------------------------------
    Online status. feed.js calls startPresence() once after login; it keeps presence/{myUid} up to date.
    The inbox and the conversation header read the presence of the people you follow.
 ---------------------------------------------------------------- */
@@ -248,6 +382,7 @@ let showActiveStatus = true; // "Show my active status" (userSettings/{uid}/show
 export function startPresence({ db, currentUser } = {}) {
   if (presenceStarted || !db || !currentUser) return;
   presenceStarted = true;
+  startDelivery(db, currentUser.uid);
 
   const myRef = ref(db, `presence/${currentUser.uid}`);
   let connected = false;
@@ -804,6 +939,13 @@ export async function mount(container, ctx = {}) {
       </div>
 
       <div class="fz-messages flex-1 px-3 sm:px-4 py-3"></div>
+      <div class="fz-typing hidden px-4 pb-2" aria-live="polite">
+        <span class="inline-flex items-center gap-1 rounded-2xl rounded-bl-md bg-slate-surface border border-slate-border px-3.5 py-2.5" aria-label="${escapeHtml(other.name)} is typing">
+          <span class="w-1.5 h-1.5 rounded-full bg-slate-subtle animate-bounce" style="animation-delay:0ms"></span>
+          <span class="w-1.5 h-1.5 rounded-full bg-slate-subtle animate-bounce" style="animation-delay:150ms"></span>
+          <span class="w-1.5 h-1.5 rounded-full bg-slate-subtle animate-bounce" style="animation-delay:300ms"></span>
+        </span>
+      </div>
 
       <div class="sticky bottom-0 z-10 bg-background/95 backdrop-blur border-t border-slate-border/60">
         <div class="fz-editbar hidden items-center justify-between gap-2 px-4 pt-2.5 text-[13px] text-primary font-semibold">
@@ -812,7 +954,22 @@ export async function mount(container, ctx = {}) {
             <span class="material-symbols-outlined text-[18px]">close</span>
           </button>
         </div>
+        <div class="fz-replybar hidden items-center gap-2 px-4 pt-2.5">
+          <span class="material-symbols-outlined text-[20px] text-primary">reply</span>
+          <div class="min-w-0 flex-1 border-l-4 border-primary-container pl-2.5">
+            <div class="fz-reply-name text-[12.5px] font-semibold text-primary truncate"></div>
+            <div class="fz-reply-text text-[13px] text-slate-muted truncate"></div>
+          </div>
+          <button type="button" class="fz-reply-cancel w-8 h-8 rounded-full flex items-center justify-center text-slate-muted hover:bg-surface-container" aria-label="Cancel reply"><span class="material-symbols-outlined text-[20px]">close</span></button>
+        </div>
+        <div class="fz-attachbar hidden items-center gap-3 px-4 pt-2.5">
+          <div class="fz-attach-list flex items-center gap-2 flex-shrink-0 max-w-[60%] overflow-x-auto"></div>
+          <div class="min-w-0 flex-1 text-[13px] text-slate-muted truncate fz-attach-note">Photo ready to send</div>
+          <button type="button" class="fz-attach-remove w-8 h-8 rounded-full flex items-center justify-center text-slate-muted hover:bg-surface-container" aria-label="Remove photos"><span class="material-symbols-outlined text-[20px]">close</span></button>
+        </div>
         <div class="px-3 py-2.5 flex items-end gap-2">
+          <button type="button" class="fz-attach flex-shrink-0 w-11 h-11 rounded-full text-primary flex items-center justify-center hover:bg-surface-container active:scale-90 transition-all" aria-label="Send photos"><span class="material-symbols-outlined text-[24px]">image</span></button>
+          <input type="file" class="fz-file" accept="image/*" multiple hidden />
           <textarea class="fz-input flex-1 resize-none bg-slate-surface border border-slate-border focus:border-primary-container focus:ring-2 focus:ring-primary-container/15 rounded-2xl px-4 py-2.5 text-[16px] leading-snug outline-none max-h-[120px]" rows="1" maxlength="${MESSAGE_MAX}" placeholder="Message ${escapeHtml(other.name.split(" ")[0])}..."></textarea>
           <button type="button" class="fz-send flex-shrink-0 w-11 h-11 rounded-full bg-primary-container text-white flex items-center justify-center shadow-md shadow-primary-container/30 active:scale-90 transition-all disabled:opacity-40" aria-label="Send" disabled>
             <span class="fz-send-icon material-symbols-outlined text-[22px]" style="font-variation-settings:'FILL' 1;">send</span>
@@ -827,7 +984,10 @@ export async function mount(container, ctx = {}) {
 
     root.querySelector(".fz-head").addEventListener("click", () => ctx.onOpenProfile?.(otherUid));
 
+    const callOther = { uid: otherUid, name: other.name, photoURL: other.photoURL };
     ctx.setActions?.([
+      { icon: "call", label: "Voice call", onClick: () => startCall({ db, me, other: callOther, video: false }) },
+      { icon: "videocam", label: "Video call", onClick: () => startCall({ db, me, other: callOther, video: true }) },
       {
         icon: "more_vert",
         label: "More options",
@@ -848,25 +1008,33 @@ export async function mount(container, ctx = {}) {
       }
     ]);
 
-    // Green dot and "Active now" / "Active 5m ago" (only visible if you follow this person)
+    // Green dot and "Active now" / "Active 5m ago" (only visible if you follow this person); "typing..." wins while they type
     const dotEl = root.querySelector(".fz-dot");
     const statusEl = root.querySelector(".fz-status");
+    const typingEl = root.querySelector(".fz-typing");
     const plainStatus = other.username ? `@${other.username}` : "";
+    let presenceValue = null;
+    let typingNow = false;
+    const paintStatus = () => {
+      const online = !!(presenceValue && presenceValue.online === true);
+      dotEl.classList.toggle("hidden", !online);
+      if (typingNow) {
+        statusEl.textContent = "typing...";
+        statusEl.className = "fz-status font-body-sm text-body-sm text-online-emerald font-semibold truncate";
+      } else if (online) {
+        statusEl.textContent = "Active now";
+        statusEl.className = "fz-status font-body-sm text-body-sm text-online-emerald font-semibold truncate";
+      } else {
+        statusEl.textContent = presenceValue && Number(presenceValue.lastSeen) ? `Active ${timeAgo(Number(presenceValue.lastSeen))}` : plainStatus;
+        statusEl.className = "fz-status font-body-sm text-body-sm text-slate-muted truncate";
+      }
+    };
     const unsubscribePresence = !showActiveStatus ? () => {} : onValue(
       ref(db, `presence/${otherUid}`),
       (snap) => {
         if (stale(token)) return unsubscribePresence();
-        const value = snap.exists() ? snap.val() : null;
-        const online = !!(value && value.online === true);
-        dotEl.classList.toggle("hidden", !online);
-
-        if (online) {
-          statusEl.textContent = "Active now";
-          statusEl.className = "fz-status font-body-sm text-body-sm text-online-emerald font-semibold truncate";
-        } else {
-          statusEl.textContent = value && Number(value.lastSeen) ? `Active ${timeAgo(Number(value.lastSeen))}` : plainStatus;
-          statusEl.className = "fz-status font-body-sm text-body-sm text-slate-muted truncate";
-        }
+        presenceValue = snap.exists() ? snap.val() : null;
+        paintStatus();
       },
       () => {} // no permission: only the @username is shown
     );
@@ -876,6 +1044,8 @@ export async function mount(container, ctx = {}) {
     let currentMessages = []; // what is on screen now
     let hasMore = false; // there may be earlier messages to load
     let otherReadAt = 0; // when the other person last read this chat
+    let otherDeliveredAt = 0; // when a message last reached the other person's app
+    let replyingTo = null; // the message I am answering: { id, from, text, photo }
     let editing = null; // the message being edited: { id, from, text, createdAt }
     let saveEdit = async () => {}; // set below, used by send()
     let firstRender = true;
@@ -930,7 +1100,7 @@ export async function mount(container, ctx = {}) {
         const groupedWithNext = next && next.from === message.from && new Date(nextTime).toDateString() === day && nextTime - time < GROUP_MS;
         const isLastMine = index === lastMineIndex;
         const showMeta = !groupedWithNext || edited || isLastMine;
-        const status = isLastMine ? (otherReadAt >= time ? `<span class="text-primary font-semibold">Seen</span>` : "Sent") : "";
+        const status = isLastMine ? (otherReadAt >= time ? `<span class="text-primary font-semibold">Seen</span>` : otherDeliveredAt >= time ? "Delivered" : "Sent") : "";
 
         // A reply or reaction to a story shows the story picture above the text
         const story = !deleted && message.story && message.story.imageURL ? message.story : null;
@@ -943,9 +1113,40 @@ export async function mount(container, ctx = {}) {
         const storyHtml = story
           ? `<span class="flex items-center gap-2 mb-1.5"><img src="${escapeHtml(story.imageURL)}" alt="" class="w-9 h-12 rounded-md object-cover flex-shrink-0 bg-black/10" onerror="this.remove()" /><span class="text-[12px] ${mine && !isReaction ? "text-white/80" : "text-slate-muted"}">${storyLabel}</span></span>`
           : "";
+        const photos = photoUrlsOf(message);
+        const hasPhotos = photos.length > 0;
+        const moreBtn = `<button type="button" class="fz-img-more absolute top-1.5 right-1.5 w-7 h-7 rounded-full bg-black/45 text-white flex items-center justify-center" aria-label="Message options" data-more="${escapeHtml(message.id)}"><span class="material-symbols-outlined text-[18px]">more_horiz</span></button>`;
+        const tile = (url, i, style) => `<img src="${escapeHtml(url)}" alt="Photo ${i + 1}" class="fz-chat-img cursor-zoom-in" data-pi="${i}" loading="lazy" style="display:block;width:100%;object-fit:cover;${style}" onerror="this.style.visibility='hidden'" />`;
+        const ratio = message.imgW > 0 && message.imgH > 0 ? Math.min(Math.max(message.imgW / message.imgH, 0.5), 2) : 1;
+        let photoHtml = "";
+        if (photos.length === 1) {
+          photoHtml = `<span class="relative block overflow-hidden rounded-xl bg-black/10" style="width:min(240px,62vw);aspect-ratio:${ratio.toFixed(3)};"><img src="${escapeHtml(photos[0])}" alt="Photo" class="fz-chat-img w-full h-full object-cover cursor-zoom-in" data-pi="0" loading="lazy" onerror="this.parentNode.classList.add('flex','items-center','justify-center');this.replaceWith('Photo unavailable')" />${moreBtn}</span>`;
+        } else if (photos.length > 1) {
+          photoHtml = `<span class="relative block overflow-hidden rounded-xl bg-black/10" style="width:min(260px,66vw);"><span class="grid" style="grid-template-columns:1fr 1fr;gap:2px;">${photos
+            .map((url, i) => tile(url, i, photos.length === 3 && i === 0 ? "grid-column:1 / 3;aspect-ratio:2 / 1;" : "aspect-ratio:1 / 1;"))
+            .join("")}</span>${moreBtn}</span>`;
+        }
+        const captionHtml = hasPhotos ? (message.text ? `<span class="block px-2.5 pt-1.5 pb-1">${escapeHtml(message.text)}</span>` : "") : "";
+
+        // "Forwarded" label and the quoted message of a reply (tap the quote to jump to the original)
+        const forwardedHtml = !deleted && message.forwarded === true
+          ? `<span class="flex items-center gap-1 text-[11.5px] italic mb-1 ${mine ? "text-white/80" : "text-slate-muted"}${hasPhotos ? " px-2 pt-1" : ""}"><span class="material-symbols-outlined text-[14px]">forward</span>Forwarded</span>`
+          : "";
+        let quoteHtml = "";
+        if (!deleted && message.replyTo && message.replyTo.id) {
+          const reply = message.replyTo;
+          const original = messages.find((m) => m.id === reply.id);
+          const gone = !!original && original.deleted === true;
+          const who = reply.from === me ? "You" : other.name;
+          const snippet = gone ? "Message deleted" : `${reply.photo ? "📷 " : ""}${reply.text || (reply.photo ? "Photo" : "")}`;
+          quoteHtml = `<span class="fz-quote block rounded-lg px-2.5 py-1.5 mb-1.5 text-[12.5px] leading-snug border-l-4 cursor-pointer ${hasPhotos ? "mx-1 mt-1 " : ""}${mine ? "bg-white/15 border-white/70 text-white/90" : "bg-surface-container border-primary-container text-on-surface-variant"}" data-goto="${escapeHtml(reply.id)}"><span class="block font-semibold truncate">${escapeHtml(who)}</span><span class="block truncate ${gone ? "italic" : ""}">${escapeHtml(snippet)}</span></span>`;
+        }
+
         const contentHtml = deleted
           ? "This message was deleted"
-          : `${storyHtml}${isReaction ? `<span class="text-[34px] leading-none">${escapeHtml(message.text)}</span>` : escapeHtml(message.text)}`;
+          : hasPhotos
+            ? `${forwardedHtml}${quoteHtml}${photoHtml}${captionHtml}`
+            : `${forwardedHtml}${quoteHtml}${storyHtml}${isReaction ? `<span class="text-[34px] leading-none">${escapeHtml(message.text)}</span>` : escapeHtml(message.text)}`;
 
         const bubbleClass = deleted
           ? "border border-dashed border-slate-border text-slate-subtle italic"
@@ -955,10 +1156,19 @@ export async function mount(container, ctx = {}) {
             ? "bg-primary-container text-white rounded-br-md cursor-pointer"
             : "bg-slate-surface border border-slate-border text-on-surface rounded-bl-md cursor-pointer";
 
+        // Emoji reactions: a small pill under the bubble (tap it to take back my own reaction)
+        const reactionMap = !deleted && message.reactions && typeof message.reactions === "object" ? message.reactions : {};
+        const reactionList = Object.values(reactionMap).filter((emoji) => typeof emoji === "string" && emoji);
+        const iReacted = typeof reactionMap[me] === "string" && reactionMap[me] !== "";
+        const reactionPill = reactionList.length
+          ? `<button type="button" class="fz-react-pill relative z-[1] -mt-2.5 ${mine ? "mr-2" : "ml-2"} inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-slate-surface border ${iReacted ? "border-primary-container" : "border-slate-border"} shadow-sm text-[14px] leading-none" data-react="${escapeHtml(message.id)}" aria-label="Reactions: ${escapeHtml([...new Set(reactionList)].join(" "))}">${[...new Set(reactionList)].join("")}${reactionList.length > 1 ? `<span class="text-[11px] text-slate-muted font-semibold ml-0.5">${reactionList.length}</span>` : ""}</button>`
+          : "";
+
         html += `
           <div class="flex ${mine ? "justify-end" : "justify-start"} ${groupedWithNext ? "mb-0.5" : "mb-2.5"}">
             <div class="max-w-[80%] flex flex-col ${mine ? "items-end" : "items-start"}">
-              <div class="fz-bubble px-3.5 py-2 rounded-2xl font-body-md text-body-md whitespace-pre-wrap break-words ${bubbleClass}" ${deleted ? "" : `data-mid="${escapeHtml(message.id)}"`}>${contentHtml}</div>
+              <div class="fz-bubble ${hasPhotos ? "p-1" : "px-3.5 py-2"} rounded-2xl font-body-md text-body-md whitespace-pre-wrap break-words ${bubbleClass}" ${deleted ? "" : `data-mid="${escapeHtml(message.id)}"`}>${contentHtml}</div>
+              ${reactionPill}
               ${showMeta ? `<span class="text-[11px] text-slate-subtle mt-1 px-1">${timeOf(time)}${edited ? " · edited" : ""}${status ? ` · ${status}` : ""}</span>` : ""}
             </div>
           </div>`;
@@ -1025,6 +1235,51 @@ export async function mount(container, ctx = {}) {
       () => {} // no permission: the mark simply stays "Sent"
     );
 
+    // "Delivered": the other person's app received a message
+    const unsubscribeDelivered = onValue(
+      ref(db, `chats/${chatId}/delivered/${otherUid}`),
+      (snap) => {
+        if (stale(token)) return unsubscribeDelivered();
+        otherDeliveredAt = Number(snap.val()) || 0;
+        renderMessages(currentMessages, hasMore);
+      },
+      () => {} // no permission: the mark stays "Sent"
+    );
+
+    // "typing...": the other person is writing to me right now
+    const unsubscribeTyping = onValue(
+      ref(db, `chats/${chatId}/typing/${otherUid}`),
+      (snap) => {
+        if (stale(token)) return unsubscribeTyping();
+        const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 140;
+        typingNow = snap.val() === true;
+        typingEl.classList.toggle("hidden", !typingNow);
+        paintStatus();
+        if (typingNow && nearBottom) scrollToBottom();
+      },
+      () => {}
+    );
+
+    // My own typing mark: set while I write, removed after a pause, on send, and when the connection drops
+    const typingRef = ref(db, `chats/${chatId}/typing/${me}`);
+    let typingOn = false;
+    let typingTimer = null;
+    const setTyping = (on) => {
+      clearTimeout(typingTimer);
+      if (on === typingOn) {
+        if (on) typingTimer = setTimeout(() => setTyping(false), 3500);
+        return;
+      }
+      typingOn = on;
+      if (on) {
+        onDisconnect(typingRef).remove().catch(() => {});
+        set(typingRef, true).catch(() => {});
+        typingTimer = setTimeout(() => setTyping(false), 3500);
+      } else {
+        set(typingRef, null).catch(() => {});
+      }
+    };
+
     // Coming back to the app with the chat open counts as reading it
     const onVisible = () => {
       if (!stale(token)) markRead();
@@ -1032,8 +1287,11 @@ export async function mount(container, ctx = {}) {
     document.addEventListener("visibilitychange", onVisible);
 
     stopView = () => {
+      setTyping(false);
       unsubscribe();
       unsubscribeReads();
+      unsubscribeDelivered();
+      unsubscribeTyping();
       unsubscribePresence();
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -1049,9 +1307,13 @@ export async function mount(container, ctx = {}) {
     const autosize = () => {
       inputEl.style.height = "auto";
       inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
-      sendBtn.disabled = !inputEl.value.trim();
+      sendBtn.disabled = uploading || !(inputEl.value.trim() || pendingImages.length);
     };
-    inputEl.addEventListener("input", autosize);
+    inputEl.addEventListener("input", () => {
+      autosize();
+      if (showActiveStatus && !editing && inputEl.value.trim()) setTyping(true);
+      else setTyping(false);
+    });
 
     const canEnterSend = window.matchMedia && window.matchMedia("(pointer: fine)").matches; // Enter sends on computers only
     inputEl.addEventListener("keydown", (event) => {
@@ -1061,10 +1323,179 @@ export async function mount(container, ctx = {}) {
       }
     });
 
+    /* ---- sending photos (up to 4 together) ---- */
+    const attachBtn = root.querySelector(".fz-attach");
+    const fileInput = root.querySelector(".fz-file");
+    const attachBar = root.querySelector(".fz-attachbar");
+    const attachList = root.querySelector(".fz-attach-list");
+    const attachNote = root.querySelector(".fz-attach-note");
+    let pendingImages = []; // [{ blob, url, w, h }]
+    let uploading = false;
+    let uploadAbort = null;
+    let uploadNote = "";
+
+    const paintAttach = () => {
+      const has = pendingImages.length > 0;
+      attachBar.classList.toggle("hidden", !has);
+      attachBar.classList.toggle("flex", has);
+      attachList.innerHTML = pendingImages
+        .map(
+          (image, i) => `
+        <div class="relative w-14 h-14 flex-shrink-0 rounded-xl overflow-hidden bg-surface-container">
+          <img src="${image.url}" alt="Photo ${i + 1}" class="w-full h-full object-cover ${uploading ? "opacity-60" : ""}" />
+          ${uploading ? "" : `<button type="button" class="fz-attach-x absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center" data-i="${i}" aria-label="Remove photo ${i + 1}"><span class="material-symbols-outlined text-[14px]">close</span></button>`}
+        </div>`
+        )
+        .join("");
+      attachNote.textContent = uploading ? uploadNote : pendingImages.length > 1 ? `${pendingImages.length} photos ready to send` : "Photo ready to send";
+      autosize();
+    };
+
+    const clearPending = () => {
+      pendingImages.forEach((image) => image.url && URL.revokeObjectURL(image.url));
+      pendingImages = [];
+      paintAttach();
+    };
+
+    attachBtn.addEventListener("click", () => {
+      if (editing || uploading) return;
+      if (pendingImages.length >= MAX_PHOTOS) return showToast(`Up to ${MAX_PHOTOS} photos at a time`);
+      fileInput.click();
+    });
+    fileInput.addEventListener("change", async () => {
+      const files = Array.from(fileInput.files || []);
+      fileInput.value = "";
+      if (!files.length) return;
+      const room = MAX_PHOTOS - pendingImages.length;
+      if (files.length > room) showToast(`Up to ${MAX_PHOTOS} photos at a time`);
+      attachBtn.disabled = true;
+      try {
+        for (const file of files.slice(0, Math.max(room, 0))) {
+          if (!file.type.startsWith("image/")) {
+            showToast("Please choose pictures only");
+            continue;
+          }
+          if (file.size > 25 * 1024 * 1024) {
+            showToast("A picture is too large (25 MB max)");
+            continue;
+          }
+          try {
+            const blob = await prepareImage(file, 1280, 0.85);
+            let w = 0;
+            let h = 0;
+            try {
+              const bitmap = await createImageBitmap(blob);
+              w = bitmap.width;
+              h = bitmap.height;
+              bitmap.close?.();
+            } catch (error) {
+              /* the size is only used to reserve space */
+            }
+            pendingImages.push({ blob, url: URL.createObjectURL(blob), w, h });
+            paintAttach();
+          } catch (error) {
+            console.error("Chat photo:", error);
+            showToast(error && error.message ? error.message : "Could not open a picture");
+          }
+        }
+        inputEl.focus();
+      } finally {
+        attachBtn.disabled = false;
+      }
+    });
+    attachList.addEventListener("click", (event) => {
+      const button = event.target.closest(".fz-attach-x");
+      if (!button || uploading) return;
+      const [removed] = pendingImages.splice(Number(button.dataset.i), 1);
+      if (removed && removed.url) URL.revokeObjectURL(removed.url);
+      paintAttach();
+    });
+    root.querySelector(".fz-attach-remove").addEventListener("click", () => {
+      if (uploading && uploadAbort) uploadAbort.abort(); // cancel the upload
+      else clearPending();
+    });
+
+    /* ---- replying to a message ---- */
+    const replyBar = root.querySelector(".fz-replybar");
+    const replyName = root.querySelector(".fz-reply-name");
+    const replyText = root.querySelector(".fz-reply-text");
+    const setReply = (message) => {
+      replyingTo = message ? { id: message.id, from: message.from, text: message.text || "", photo: photoUrlsOf(message).length > 0 } : null;
+      replyBar.classList.toggle("hidden", !message);
+      replyBar.classList.toggle("flex", !!message);
+      if (message) {
+        replyName.textContent = message.from === me ? "You" : other.name;
+        replyText.textContent = `${replyingTo.photo ? "📷 " : ""}${replyingTo.text || (replyingTo.photo ? "Photo" : "")}`;
+        inputEl.focus();
+      }
+    };
+    root.querySelector(".fz-reply-cancel").addEventListener("click", () => setReply(null));
+    // What goes into the new message when I am answering one
+    const replyExtra = () => (replyingTo ? { replyTo: replyPayload(replyingTo) } : {});
+
+    async function sendPhotos(text) {
+      const images = pendingImages.slice();
+      uploading = true;
+      uploadAbort = new AbortController();
+      uploadNote = images.length > 1 ? `Sending photo 1 of ${images.length}...` : "Sending photo... 0%";
+      paintAttach();
+      try {
+        const urls = [];
+        for (let i = 0; i < images.length; i++) {
+          const label = images.length > 1 ? `Sending photo ${i + 1} of ${images.length}` : "Sending photo";
+          const url = await uploadToImgbb(images[i].blob, "chat.jpg", {
+            signal: uploadAbort.signal,
+            onProgress: (fraction) => {
+              uploadNote = `${label}... ${Math.round(fraction * 100)}%`;
+              attachNote.textContent = uploadNote;
+            }
+          });
+          urls.push(url);
+        }
+        const extra = { imageURL: urls[0], ...replyExtra() };
+        if (urls.length > 1) extra.images = urls;
+        else if (images[0].w > 0 && images[0].h > 0) {
+          extra.imgW = Math.min(images[0].w, 6000);
+          extra.imgH = Math.min(images[0].h, 6000);
+        }
+        const what = urls.length > 1 ? `${urls.length} photos` : "Photo";
+        await sendChatMessage(db, me, otherUid, text, extra, text ? `📷 ${text}` : `📷 ${what}`);
+        inputEl.value = "";
+        setTyping(false);
+        setReply(null);
+        uploading = false;
+        clearPending();
+      } catch (error) {
+        uploading = false;
+        if (error && error.name === "AbortError") {
+          clearPending();
+        } else {
+          console.error("Chat photo send:", error);
+          showToast(error && error.code === "PERMISSION_DENIED" ? "Could not send: database rules block it" : "Could not send the photos. Try again.");
+          paintAttach();
+        }
+      } finally {
+        uploading = false;
+        uploadAbort = null;
+        paintAttach();
+      }
+    }
+
     let sending = false;
     async function send() {
       const text = inputEl.value.trim();
-      if (!text || sending) return;
+      if ((!text && !pendingImages.length) || sending || uploading) return;
+
+      if (pendingImages.length && !editing) {
+        sending = true;
+        try {
+          await sendPhotos(text);
+        } finally {
+          sending = false;
+        }
+        return;
+      }
+      if (!text) return;
 
       if (editing) {
         sending = true;
@@ -1080,11 +1511,16 @@ export async function mount(container, ctx = {}) {
 
       inputEl.value = "";
       autosize();
+      setTyping(false);
+      const repliedTo = replyingTo;
+      const extra = replyExtra();
+      setReply(null);
 
       try {
-        await sendChatMessage(db, me, otherUid, text);
+        await sendChatMessage(db, me, otherUid, text, extra);
       } catch (error) {
         console.error("Chat send:", error);
+        if (repliedTo && !replyingTo) setReply(currentMessages.find((m) => m.id === repliedTo.id) || null);
         showToast(error.code === "PERMISSION_DENIED" ? "Could not send: database rules block it" : "Could not send. Try again.");
         if (!inputEl.value) {
           inputEl.value = text; // give the text back so nothing is lost
@@ -1107,6 +1543,8 @@ export async function mount(container, ctx = {}) {
       sendIcon.textContent = message ? "check" : "send";
       sendBtn.setAttribute("aria-label", message ? "Save" : "Send");
       inputEl.value = message ? message.text : "";
+      attachBtn.style.display = message ? "none" : ""; // a message being edited cannot get a picture
+      if (message) setReply(null);
       autosize();
       if (message) inputEl.focus();
     };
@@ -1134,7 +1572,10 @@ export async function mount(container, ctx = {}) {
             text,
             createdAt: message.createdAt,
             editedAt: serverTimestamp(),
-            ...(message.story ? { story: message.story } : {})
+            ...(message.story ? { story: message.story } : {}),
+            ...(message.replyTo ? { replyTo: message.replyTo } : {}),
+            ...(message.forwarded ? { forwarded: true } : {}),
+            ...(message.reactions ? { reactions: message.reactions } : {})
           },
           ...previewPaths(message, text.slice(0, 120))
         });
@@ -1165,22 +1606,135 @@ export async function mount(container, ctx = {}) {
       }
     };
 
-    // Tap a message to copy, edit or delete it
+    // Jump to the original message of a reply
+    const jumpTo = (id) => {
+      const target = Array.from(messagesEl.querySelectorAll("[data-mid]")).find((el) => el.dataset.mid === id);
+      if (!target) return showToast("The original message is further up. Load earlier messages.");
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+      target.classList.add("ring-2", "ring-primary-container");
+      setTimeout(() => target.classList.remove("ring-2", "ring-primary-container"), 1400);
+    };
+
+    // People a message can be forwarded to: my recent chats first, then the people I follow
+    const forwardTargets = async () => {
+      const ids = [];
+      try {
+        const snap = await get(ref(db, `userChats/${me}`));
+        const list = [];
+        snap.forEach((child) => {
+          const value = child.val();
+          if (value && value.with) list.push(value);
+        });
+        list.sort((a, b) => (Number(b.lastAt) || 0) - (Number(a.lastAt) || 0));
+        list.forEach((value) => ids.push(value.with));
+      } catch (error) {
+        // no recent chats
+      }
+      Object.keys(ctx.followingIds || {}).forEach((uid) => ids.push(uid));
+      const unique = [...new Set(ids)].filter((uid) => uid && uid !== me && !isBlocked(uid)).slice(0, 40);
+      const users = await Promise.all(unique.map((uid) => readUser(db, uid)));
+      return users.filter(Boolean);
+    };
+
+    const forwardMessage = async (message) => {
+      const photos = photoUrlsOf(message);
+      const people = await forwardTargets();
+      const text = message.text || "";
+      const extra = { forwarded: true };
+      if (photos.length) {
+        extra.imageURL = photos[0];
+        if (photos.length > 1) extra.images = photos;
+        else if (message.imgW > 0 && message.imgH > 0) {
+          extra.imgW = message.imgW;
+          extra.imgH = message.imgH;
+        }
+      }
+      const preview = photos.length ? (text ? `📷 ${text}` : photos.length > 1 ? `📷 ${photos.length} photos` : "📷 Photo") : text;
+      await openForwardSheet({
+        people,
+        preview: preview || "Message",
+        onSend: async (uid) => {
+          try {
+            await sendChatMessage(db, me, uid, text, extra, preview);
+            return true;
+          } catch (error) {
+            console.error("Forward:", error);
+            showToast(error && error.code === "PERMISSION_DENIED" ? "Could not forward: not allowed" : "Could not forward. Try again.");
+            return false;
+          }
+        }
+      });
+    };
+
+    // One emoji per person on a message; null takes it back. Written under the message, so the other person can react too.
+    const setReaction = async (message, emoji) => {
+      try {
+        await update(ref(db), { [`chats/${chatId}/messages/${message.id}/reactions/${me}`]: emoji || null });
+      } catch (error) {
+        console.error("Chat reaction:", error);
+        showToast(error.code === "PERMISSION_DENIED" ? "Could not react: database rules block it" : "Could not react. Try again.");
+      }
+    };
+
+    // Tap a message: react, reply, forward, copy, save the photos, edit or delete
     messagesEl.addEventListener("click", async (event) => {
+      // Tap my own reaction pill: take the reaction back
+      const pill = event.target.closest(".fz-react-pill");
+      if (pill) {
+        event.stopPropagation();
+        const target = currentMessages.find((m) => m.id === pill.dataset.react);
+        if (target && target.reactions && target.reactions[me]) setReaction(target, null);
+        return;
+      }
+
+      const quote = event.target.closest(".fz-quote");
+      if (quote) {
+        event.stopPropagation();
+        return jumpTo(quote.dataset.goto);
+      }
+
       const bubble = event.target.closest("[data-mid]");
       if (!bubble) return;
       const message = currentMessages.find((m) => m.id === bubble.dataset.mid);
       if (!message || message.deleted) return;
+      const photos = photoUrlsOf(message);
 
-      const actions = [{ key: "copy", label: "Copy", icon: "content_copy" }];
+      // Tap a picture: full-screen viewer (swipe through all pictures of this chat)
+      const tapped = event.target.closest(".fz-chat-img");
+      if (tapped && !event.target.closest(".fz-img-more")) {
+        const all = [];
+        let start = 0;
+        const tappedIndex = Number(tapped.dataset.pi) || 0;
+        currentMessages.forEach((m) => {
+          photoUrlsOf(m).forEach((url, i) => {
+            if (m.id === message.id && i === tappedIndex) start = all.length;
+            all.push(url);
+          });
+        });
+        openImageViewer(all, start);
+        return;
+      }
+
+      const actions = [{ key: "reply", label: "Reply", icon: "reply" }];
+      if ((message.text || photos.length) && !message.reaction && !message.story) actions.push({ key: "forward", label: "Forward", icon: "forward" });
+      if (message.text) actions.push({ key: "copy", label: "Copy", icon: "content_copy" });
+      if (photos.length) actions.push({ key: "save", label: photos.length > 1 ? "Save photos" : "Save photo", icon: "download" });
       if (message.from === me) {
-        if (!message.reaction) actions.push({ key: "edit", label: "Edit", icon: "edit" });
+        if (!message.reaction && !photos.length) actions.push({ key: "edit", label: "Edit", icon: "edit" });
         actions.push({ key: "delete", label: "Delete", icon: "delete", danger: true });
       }
 
-      const choice = await openActionSheet(actions);
-      if (choice === "copy") copyText(message.text);
-      else if (choice === "edit") setEditMode({ id: message.id, from: message.from, text: message.text, createdAt: message.createdAt, story: message.story });
+      const myEmoji = message.reactions && typeof message.reactions[me] === "string" ? message.reactions[me] : "";
+      const choice = await openActionSheet(actions, { emojis: REACTIONS, current: myEmoji });
+      if (typeof choice === "string" && choice.startsWith("react:")) {
+        const emoji = choice.slice(6);
+        setReaction(message, emoji === myEmoji ? null : emoji); // the same emoji again takes it back
+      } else if (choice === "reply") setReply(message);
+      else if (choice === "forward") forwardMessage(message);
+      else if (choice === "copy") copyText(message.text);
+      else if (choice === "save") {
+        for (const url of photos) await downloadImage(url);
+      } else if (choice === "edit") setEditMode({ id: message.id, from: message.from, text: message.text, createdAt: message.createdAt, story: message.story, replyTo: message.replyTo, forwarded: message.forwarded, reactions: message.reactions });
       else if (choice === "delete") deleteMessage(message);
     });
   };
