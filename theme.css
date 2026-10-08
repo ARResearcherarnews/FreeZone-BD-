@@ -1,0 +1,116 @@
+/* FreeZone BD - colour themes. One place for light and dark.
+   Every colour name used by Tailwind (bg-slate-surface, text-on-surface ...) points to a variable here,
+   so adding or changing a dark colour never needs a change in the page files.
+   Values are "R G B" so Tailwind can still apply opacity (bg-slate-border/60). */
+:root {
+  color-scheme: light;
+  --c-on-tertiary-fixed-variant: 0 67 149;
+  --c-on-secondary-fixed: 19 27 46;
+  --c-slate-dark: 30 41 59;
+  --c-slate-surface: 255 255 255;
+  --c-on-secondary: 255 255 255;
+  --c-secondary-container: 218 226 253;
+  --c-slate-border: 226 232 240;
+  --c-on-background: 25 28 30;
+  --c-on-surface-variant: 67 70 85;
+  --c-tertiary-fixed: 216 226 255;
+  --c-tertiary-container: 15 105 220;
+  --c-on-tertiary: 255 255 255;
+  --c-notification-rose: 244 63 94;
+  --c-surface-dim: 216 218 220;
+  --c-secondary: 86 94 116;
+  --c-surface-container-highest: 224 227 229;
+  --c-error-container: 255 218 214;
+  --c-inverse-surface: 45 49 51;
+  --c-secondary-fixed: 218 226 253;
+  --c-error: 186 26 26;
+  --c-surface-bright: 247 249 251;
+  --c-surface-container-high: 230 232 234;
+  --c-on-secondary-container: 92 100 122;
+  --c-outline: 115 118 134;
+  --c-on-primary-fixed-variant: 0 62 168;
+  --c-inverse-primary: 180 197 255;
+  --c-on-surface: 25 28 30;
+  --c-on-primary: 255 255 255;
+  --c-slate-subtle: 148 163 184;
+  --c-surface: 247 249 251;
+  --c-on-tertiary-fixed: 0 26 66;
+  --c-on-error-container: 147 0 10;
+  --c-tertiary: 0 81 177;
+  --c-surface-tint: 0 83 219;
+  --c-on-primary-fixed: 0 23 75;
+  --c-secondary-fixed-dim: 190 198 224;
+  --c-background: 247 249 251;
+  --c-surface-variant: 224 227 229;
+  --c-on-secondary-fixed-variant: 63 70 92;
+  --c-slate-muted: 100 116 139;
+  --c-primary-fixed-dim: 180 197 255;
+  --c-surface-container-lowest: 255 255 255;
+  --c-on-error: 255 255 255;
+  --c-primary-container: 37 99 235;
+  --c-surface-container-low: 242 244 246;
+  --c-online-emerald: 16 185 129;
+  --c-surface-container: 236 238 240;
+  --c-primary-fixed: 219 225 255;
+  --c-tertiary-fixed-dim: 173 198 255;
+  --c-inverse-on-surface: 239 241 243;
+  --c-primary: 0 74 198;
+  --c-on-tertiary-container: 237 240 255;
+  --c-outline-variant: 195 198 215;
+  --c-on-primary-container: 238 239 255;
+}
+
+:root.dark {
+  color-scheme: dark;
+  --c-background: 15 23 42;
+  --c-surface: 15 23 42;
+  --c-surface-bright: 30 41 59;
+  --c-surface-dim: 11 18 32;
+  --c-surface-variant: 51 65 85;
+  --c-surface-tint: 147 180 255;
+  --c-surface-container-lowest: 11 18 32;
+  --c-surface-container-low: 36 48 68;
+  --c-surface-container: 45 58 80;
+  --c-surface-container-high: 54 69 96;
+  --c-surface-container-highest: 63 78 105;
+  --c-on-surface: 226 232 240;
+  --c-on-background: 226 232 240;
+  --c-on-surface-variant: 203 213 225;
+  --c-outline: 148 163 184;
+  --c-outline-variant: 71 85 105;
+  --c-slate-surface: 30 41 59;
+  --c-slate-border: 51 65 85;
+  --c-slate-muted: 148 163 184;
+  --c-slate-subtle: 100 116 139;
+  --c-slate-dark: 226 232 240;
+  --c-primary: 147 180 255;
+  --c-on-primary: 0 23 75;
+  --c-primary-fixed: 30 58 138;
+  --c-primary-fixed-dim: 47 79 184;
+  --c-on-primary-fixed: 219 225 255;
+  --c-on-primary-fixed-variant: 180 197 255;
+  --c-secondary: 170 179 201;
+  --c-secondary-container: 51 65 85;
+  --c-on-secondary-container: 203 213 225;
+  --c-secondary-fixed: 51 65 85;
+  --c-secondary-fixed-dim: 71 85 105;
+  --c-on-secondary-fixed: 226 232 240;
+  --c-on-secondary-fixed-variant: 203 213 225;
+  --c-on-secondary: 15 23 42;
+  --c-tertiary: 173 198 255;
+  --c-tertiary-fixed: 30 58 138;
+  --c-tertiary-fixed-dim: 47 79 184;
+  --c-on-tertiary-fixed: 216 226 255;
+  --c-on-tertiary-fixed-variant: 173 198 255;
+  --c-error: 239 68 68;
+  --c-error-container: 74 29 31;
+  --c-on-error-container: 254 202 202;
+  --c-inverse-surface: 226 232 240;
+  --c-inverse-on-surface: 15 23 42;
+  --c-inverse-primary: 37 99 235;
+}
+
+/* loading shimmer follows the theme */
+.skeleton { background: linear-gradient(90deg, rgb(var(--c-surface-container)) 25%, rgb(var(--c-surface)) 50%, rgb(var(--c-surface-container)) 75%); background-size: 200% 100%; }
+/* a short fade when the theme changes */
+html.theme-fade, html.theme-fade * { transition: background-color .25s ease, border-color .25s ease, color .25s ease !important; }
