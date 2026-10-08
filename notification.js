@@ -1,4 +1,4 @@
-// FreeZone BD - Notifications (likes, comments, new followers)
+// FreeZone BD - Notifications (likes, comments, replies, comment likes, new followers)
 //
 // Everything about notifications lives in this file, so it can be changed without touching feed.js:
 //   start(ctx)  - called once by feed.js after login. It
@@ -10,7 +10,7 @@
 // Data (Firebase Realtime Database):
 //   notifications/{recipientUid}/{notificationId} = { type, from, fromName, fromUsername, fromPhotoURL,
 //                                                      postId?, text?, createdAt, read }
-//   type is "like", "comment" or "follow". Ids are fixed (like_{postId}_{from}, follow_{from}, comment_{commentId}),
+//   type is "like", "comment", "reply", "commentLike" or "follow". Ids are fixed (like_{postId}_{from}, follow_{from}, comment_{commentId}),
 //   so liking the same post twice never creates two notifications, and unliking removes it.
 
 import {
@@ -33,7 +33,9 @@ const SNIPPET_MAX = 100; // characters of a post or comment shown in a notificat
 const TYPES = {
   like: { icon: "thumb_up", color: "bg-primary-container", label: "liked your post" },
   comment: { icon: "chat_bubble", color: "bg-online-emerald", label: "commented on your post" },
-  follow: { icon: "person_add", color: "bg-violet-500", label: "started following you" }
+  follow: { icon: "person_add", color: "bg-violet-500", label: "started following you" },
+  reply: { icon: "reply", color: "bg-sky-500", label: "replied to your comment" },
+  commentLike: { icon: "favorite", color: "bg-notification-rose", label: "liked your comment" }
 };
 
 const snippet = (text) => {
@@ -94,6 +96,25 @@ export function start(ctx = {}) {
 
       const commentText = snippet(detail.text);
       return send(owner, `comment_${commentId || Date.now()}`, { type, postId, ...(commentText ? { text: commentText } : {}) });
+    }
+
+    // Someone answered a comment: tell the owner of the comment (and the person who was answered)
+    if (type === "reply") {
+      if (!postId) return;
+      const replyText = snippet(detail.text);
+      const targets = new Set([toUid, detail.replyToUid].filter((uid) => uid && uid !== me));
+      return Promise.all(
+        [...targets].map((uid) => send(uid, `reply_${detail.replyId || Date.now()}`, { type, postId, ...(replyText ? { text: replyText } : {}) }))
+      );
+    }
+
+    // Someone liked a comment or a reply
+    if (type === "commentLike") {
+      if (!postId || !toUid || toUid === me) return;
+      const id = `clike_${commentId}_${detail.replyId || "c"}_${me}`;
+      if (undo) return remove(ref(db, `notifications/${toUid}/${id}`));
+      const likeText = snippet(detail.text);
+      return send(toUid, id, { type, postId, ...(likeText ? { text: likeText } : {}) });
     }
 
     if (type === "follow") {
@@ -316,7 +337,7 @@ export function mount(container, ctx = {}) {
       return;
     }
 
-    if ((n.type === "like" || n.type === "comment") && n.postId) ctx.openPost?.(n.postId);
+    if (["like", "comment", "reply", "commentLike"].includes(n.type) && n.postId) ctx.openPost?.(n.postId);
     else if (n.type === "follow") ctx.onOpenProfile?.(n.from);
   });
 }
