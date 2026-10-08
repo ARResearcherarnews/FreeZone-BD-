@@ -9,12 +9,15 @@ import {
   query,
   orderByChild,
   equalTo,
-  onValue
+  onValue,
+  set,
+  serverTimestamp
 } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-database.js";
 
 import { uploadToImgbb } from "./imgbb.js";
 import { isBlocked, blockAccount, unblockAccount, openActionMenu } from "./block.js";
-import { escapeHtml, timeAgo, showToast, avatarHtml, updateSaveButtons, createPostCard, shareProfile, postImagesHtml, postImageUrls } from "./post.js";
+import { isMuted, muteAccount, unmuteAccount } from "./mute.js";
+import { escapeHtml, timeAgo, showToast, avatarHtml, updateSaveButtons, createPostCard, shareProfile, postImagesHtml, postImageUrls, openImageViewer, openReportDialog } from "./post.js";
 
 // Profile photos are uploaded to imgbb (see imgbb.js); only the returned link is saved in Firebase.
 const PHOTO_SIZE = 512; // saved photo is a square of this many pixels
@@ -83,11 +86,19 @@ function showAds(container, placement) {
 
 function bigAvatar(photoURL) {
   if (photoURL) {
-    return `<img class="w-24 h-24 rounded-full object-cover ring-4 ring-slate-surface shadow-md" src="${escapeHtml(photoURL)}" alt="avatar" />`;
+    return `<img class="w-[92px] h-[92px] rounded-full object-cover ring-4 ring-slate-surface shadow-md" src="${escapeHtml(photoURL)}" alt="avatar" />`;
   }
-  return `<div class="w-24 h-24 rounded-full bg-gradient-to-br from-primary-fixed to-secondary-container flex items-center justify-center ring-4 ring-slate-surface shadow-md">
+  return `<div class="w-[92px] h-[92px] rounded-full bg-gradient-to-br from-primary-fixed to-secondary-container flex items-center justify-center ring-4 ring-slate-surface shadow-md">
     <span class="material-symbols-outlined text-primary text-[48px]">person</span>
   </div>`;
+}
+
+// Followers / Following: tapping opens the list of people (see openFollowList)
+function statButton(label, value, cls, list) {
+  return `<button type="button" class="stat-btn flex-1 text-center rounded-xl py-1 active:bg-surface-container transition-colors" data-list="${list}" aria-label="Show ${label.toLowerCase()}">
+    <div class="${cls} font-headline-sm text-headline-sm text-on-surface font-semibold">${value}</div>
+    <div class="font-body-sm text-body-sm text-slate-muted">${label}</div>
+  </button>`;
 }
 
 function stat(label, value, cls) {
@@ -110,7 +121,7 @@ function postCardHtml(post, { showAuthor = false, showUnsave = false } = {}) {
   const likes = post.likesCount || 0;
   const comments = post.commentsCount || 0;
   return `
-    <article class="bg-slate-surface border border-slate-border rounded-2xl p-4 shadow-sm space-y-2.5" data-post-id="${escapeHtml(post.id)}">
+    <article class="mx-3 sm:mx-4 bg-slate-surface border border-slate-border rounded-2xl p-4 shadow-sm space-y-2.5" data-post-id="${escapeHtml(post.id)}">
       <div class="flex items-center justify-between gap-2">
         ${
           showAuthor
@@ -185,6 +196,277 @@ async function loadSavedPosts(db, uid) {
  * @param {object} ctx - { currentUser, currentProfile, auth, db } from feed.js,
  *   plus { uid, isFollowing, onToggleFollow } when opening someone else's profile.
  */
+
+/* ---------------------------------------------------------------
+   Followers / Following list (a sheet opened from the two numbers on a profile)
+---------------------------------------------------------------- */
+const LIST_PAGE = 20; // people shown at a time ("Show more" adds the next ones)
+const LIST_SEARCH_CAP = 300; // most people loaded when the list is searched
+const listUserCache = new Map(); // uid -> { uid, name, username, photoURL } or null when the account is gone
+
+// ids from followers/{uid} or following/{uid}, newest first
+async function readListIds(db, path) {
+  const snap = await get(ref(db, path));
+  if (!snap.exists()) return [];
+  const time = (value) => (typeof value === "number" ? value : 0);
+  return Object.entries(snap.val())
+    .sort((a, b) => time(b[1]) - time(a[1]))
+    .map(([id]) => id);
+}
+
+async function readListUser(db, uid) {
+  if (listUserCache.has(uid)) return listUserCache.get(uid);
+  try {
+    const snap = await get(ref(db, `users/${uid}`));
+    const data = snap.exists() ? snap.val() : null;
+    const user = data ? { uid, name: data.name || "FreeZone User", username: data.username || "", photoURL: data.photoURL || "" } : null;
+    listUserCache.set(uid, user);
+    return user;
+  } catch (error) {
+    return null; // not cached: a later try may work
+  }
+}
+
+/**
+ * opts: { db, ctx, uid (whose lists), handle, isMe, startTab: "followers" | "following",
+ *         counts: { followers, following }, onCounts({ followers?, following? }) }
+ * Tap a person: open their profile. Follow / Following button on every row. On my own Followers: remove a follower.
+ */
+function openFollowList({ db, ctx, uid, handle, isMe, startTab = "followers", counts = {}, onCounts = () => {} }) {
+  const me = ctx.currentUser.uid;
+  const overlay = document.createElement("div");
+  overlay.className = "fixed inset-0 z-[9997] flex items-end sm:items-center justify-center bg-black/40";
+  overlay.innerHTML = `
+    <div class="w-full max-w-lg bg-slate-surface rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col" style="height:min(85vh,720px);" role="dialog" aria-modal="true" aria-label="Followers and following">
+      <div class="flex items-center justify-between px-4 pt-3.5 pb-1">
+        <h2 class="font-headline-sm text-headline-sm text-on-surface font-semibold truncate">${escapeHtml(handle)}</h2>
+        <button type="button" class="fl-close w-9 h-9 rounded-full flex items-center justify-center text-slate-muted hover:bg-surface-container" aria-label="Close"><span class="material-symbols-outlined text-[22px]">close</span></button>
+      </div>
+      <div class="flex gap-1 p-1 mx-4 mt-1 bg-surface-container rounded-xl">
+        <button type="button" class="fl-tab flex-1 py-2 rounded-lg font-label-lg text-label-lg font-semibold transition-all" data-tab="followers"></button>
+        <button type="button" class="fl-tab flex-1 py-2 rounded-lg font-label-lg text-label-lg font-semibold transition-all" data-tab="following"></button>
+      </div>
+      <div class="px-4 pt-3">
+        <input type="search" class="fl-search w-full bg-surface-container rounded-xl px-4 py-2.5 text-[15px] outline-none" placeholder="Search" autocomplete="off" />
+      </div>
+      <div class="fl-list flex-1 min-h-0 overflow-y-auto pt-2 pb-4"></div>
+    </div>`;
+  const listEl = overlay.querySelector(".fl-list");
+  const searchEl = overlay.querySelector(".fl-search");
+  const tabEls = overlay.querySelectorAll(".fl-tab");
+
+  // per tab: ids (null until loaded), users = resolved people in order, cursor = how many ids were looked at
+  const tabs = {
+    followers: { ids: null, users: [], cursor: 0, path: `followers/${uid}`, count: counts.followers },
+    following: { ids: null, users: [], cursor: 0, path: `following/${uid}`, count: counts.following }
+  };
+  let tab = startTab === "following" ? "following" : "followers";
+  let shown = LIST_PAGE;
+  let query = "";
+  let token = 0; // a newer paint replaces older async work
+
+  const myFollowing = () => (ctx.followingIds ||= {});
+
+  const paintTabs = () => {
+    tabEls.forEach((btn) => {
+      const name = btn.dataset.tab;
+      const state = tabs[name];
+      // on my own profile the Following number follows every follow / unfollow done in the list
+      const n = isMe && name === "following" ? Object.keys(myFollowing()).length : state.ids ? state.ids.length : state.count;
+      btn.textContent = `${name === "followers" ? "Followers" : "Following"}${typeof n === "number" ? " " + n : ""}`;
+      btn.className =
+        "fl-tab flex-1 py-2 rounded-lg font-label-lg text-label-lg font-semibold transition-all " +
+        (name === tab ? "bg-slate-surface text-primary shadow-sm" : "text-slate-muted");
+    });
+  };
+
+  // Looks up more people until `want` are ready (blocked and deleted accounts are skipped)
+  const resolve = async (state, want) => {
+    while (state.users.length < want && state.cursor < state.ids.length) {
+      const batch = state.ids.slice(state.cursor, state.cursor + LIST_PAGE);
+      state.cursor += batch.length;
+      const people = await Promise.all(batch.map((id) => readListUser(db, id)));
+      people.forEach((person) => {
+        if (person && !isBlocked(person.uid)) state.users.push(person);
+      });
+    }
+  };
+
+  const rowHtml = (person) => {
+    const isSelf = person.uid === me;
+    const following = !!myFollowing()[person.uid];
+    let actions = "";
+    if (isSelf) actions = `<span class="text-[12px] text-slate-muted px-2">You</span>`;
+    else {
+      actions = `<button type="button" class="fl-follow px-4 py-1.5 rounded-full font-label-md text-label-md font-semibold active:scale-95 transition-all disabled:opacity-60 ${following ? "bg-surface-container text-on-surface" : "bg-primary-container text-white"}" data-uid="${escapeHtml(person.uid)}">${following ? "Following" : tab === "followers" && isMe ? "Follow back" : "Follow"}</button>`;
+      if (isMe && tab === "followers")
+        actions += `<button type="button" class="fl-remove w-8 h-8 rounded-full flex items-center justify-center text-slate-muted hover:bg-surface-container flex-shrink-0" data-uid="${escapeHtml(person.uid)}" aria-label="Remove follower"><span class="material-symbols-outlined text-[20px]">person_remove</span></button>`;
+    }
+    return `
+      <div class="fl-row flex items-center gap-2 px-4 py-2" data-uid="${escapeHtml(person.uid)}">
+        <button type="button" class="fl-open flex items-center gap-3 min-w-0 flex-1 text-left active:opacity-70" data-uid="${escapeHtml(person.uid)}">
+          ${avatarHtml(person.photoURL, "w-11 h-11")}
+          <span class="min-w-0">
+            <span class="block font-label-lg text-label-lg text-on-surface truncate">${escapeHtml(person.name)}</span>
+            ${person.username ? `<span class="block font-body-sm text-body-sm text-slate-muted truncate">@${escapeHtml(person.username)}</span>` : ""}
+          </span>
+        </button>
+        ${actions}
+      </div>`;
+  };
+
+  const message = (text) => `<p class="text-center text-slate-muted font-body-md text-body-md py-12 px-6">${text}</p>`;
+
+  const paint = async () => {
+    const mine = ++token;
+    const state = tabs[tab];
+    paintTabs();
+
+    if (!state.ids) {
+      listEl.innerHTML = Array.from({ length: 5 })
+        .map(() => `<div class="flex items-center gap-3 px-4 py-2 animate-pulse"><div class="w-11 h-11 rounded-full bg-surface-container"></div><div class="flex-1 space-y-2"><div class="h-3 w-1/2 rounded bg-surface-container"></div><div class="h-3 w-1/3 rounded bg-surface-container"></div></div></div>`)
+        .join("");
+      try {
+        state.ids = await readListIds(db, state.path);
+      } catch (error) {
+        console.error("Follow list:", error);
+        if (mine === token) listEl.innerHTML = message("Could not load this list. Check your connection and database rules.");
+        return;
+      }
+      state.count = state.ids.length;
+      if (mine !== token) return;
+      paintTabs();
+    }
+
+    const term = query.trim().toLowerCase();
+    try {
+      await resolve(state, term ? LIST_SEARCH_CAP : shown);
+    } catch (error) {
+      console.error("Follow list:", error);
+    }
+    if (mine !== token) return;
+
+    const people = term ? state.users.filter((person) => (person.name + " " + person.username).toLowerCase().includes(term)) : state.users.slice(0, shown);
+    if (!people.length) {
+      listEl.innerHTML = message(
+        term
+          ? "No one found."
+          : tab === "followers"
+            ? isMe ? "No followers yet." : "No followers yet."
+            : isMe ? "You are not following anyone yet." : "Not following anyone yet."
+      );
+      return;
+    }
+    const more = !term && (state.users.length > shown || state.cursor < state.ids.length);
+    listEl.innerHTML =
+      people.map(rowHtml).join("") +
+      (more ? `<div class="text-center py-3"><button type="button" class="fl-more px-5 py-2 rounded-full bg-surface-container text-on-surface font-label-md text-label-md font-semibold active:scale-95 transition-all">Show more</button></div>` : "");
+  };
+
+  const close = () => {
+    token++;
+    overlay.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (event) => {
+    if (event.key === "Escape") close();
+  };
+  document.addEventListener("keydown", onKey);
+
+  // numbers shown on my own profile follow what happens in the list
+  const syncMyCounts = () => {
+    const n = Object.keys(myFollowing()).length;
+    tabs.following.count = n;
+    if (isMe) {
+      if (tabs.following.ids) tabs.following.count = n;
+      onCounts({ following: n });
+    }
+  };
+
+  overlay.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (event.target === overlay || event.target.closest(".fl-close")) return close();
+
+    const tabBtn = event.target.closest(".fl-tab");
+    if (tabBtn) {
+      if (tabBtn.dataset.tab === tab) return;
+      tab = tabBtn.dataset.tab;
+      shown = LIST_PAGE;
+      searchEl.value = "";
+      query = "";
+      listEl.scrollTop = 0;
+      return paint();
+    }
+
+    if (event.target.closest(".fl-more")) {
+      shown += LIST_PAGE;
+      return paint();
+    }
+
+    const open = event.target.closest(".fl-open");
+    if (open) {
+      const target = open.dataset.uid;
+      close();
+      if (target === uid) return; // already on this profile
+      if (ctx.onOpenProfile) ctx.onOpenProfile(target);
+      else if (ctx.__remount) ctx.__remount(target);
+      return;
+    }
+
+    const followBtn = event.target.closest(".fl-follow");
+    if (followBtn && !followBtn.disabled) {
+      const person = tabs[tab].users.find((u) => u.uid === followBtn.dataset.uid);
+      if (!person || !ctx.onToggleFollow) return;
+      const wasFollowing = !!myFollowing()[person.uid];
+      followBtn.disabled = true;
+      const ok = await ctx.onToggleFollow({ uid: person.uid, name: person.name, username: person.username }, wasFollowing);
+      followBtn.disabled = false;
+      if (!ok) return;
+      // the other list may show the same person: its buttons are repainted when it is opened
+      const nowFollowing = !wasFollowing;
+      if (nowFollowing) myFollowing()[person.uid] = myFollowing()[person.uid] || Date.now(); // feed.js already did this; keeps other callers right
+      else delete myFollowing()[person.uid];
+      followBtn.textContent = nowFollowing ? "Following" : tab === "followers" && isMe ? "Follow back" : "Follow";
+      followBtn.className = `fl-follow px-4 py-1.5 rounded-full font-label-md text-label-md font-semibold active:scale-95 transition-all disabled:opacity-60 ${nowFollowing ? "bg-surface-container text-on-surface" : "bg-primary-container text-white"}`;
+      syncMyCounts();
+      paintTabs();
+      return;
+    }
+
+    const removeBtn = event.target.closest(".fl-remove");
+    if (removeBtn) {
+      const person = tabs.followers.users.find((u) => u.uid === removeBtn.dataset.uid);
+      if (!person) return;
+      const choice = await openActionMenu([{ key: "remove", label: `Remove ${person.username ? "@" + person.username : person.name}`, icon: "person_remove", danger: true }]);
+      if (choice !== "remove") return;
+      try {
+        await update(ref(db), { [`followers/${me}/${person.uid}`]: null, [`following/${person.uid}/${me}`]: null });
+      } catch (error) {
+        console.error("Remove follower:", error);
+        showToast(error.code === "PERMISSION_DENIED" ? "Could not remove: database rules block it" : "Could not remove. Try again.");
+        return;
+      }
+      const state = tabs.followers;
+      state.users = state.users.filter((u) => u.uid !== person.uid);
+      if (state.ids) state.ids = state.ids.filter((id) => id !== person.uid);
+      state.cursor = Math.max(0, state.cursor - 1);
+      state.count = state.ids ? state.ids.length : Math.max(0, (state.count || 1) - 1);
+      onCounts({ followers: state.count });
+      showToast("Follower removed");
+      return paint();
+    }
+  });
+
+  searchEl.addEventListener("input", () => {
+    query = searchEl.value;
+    shown = LIST_PAGE;
+    paint();
+  });
+
+  document.body.appendChild(overlay);
+  paint();
+}
+
 export async function mount(container, ctx = {}) {
   const { db, currentUser, isFollowing, onToggleFollow } = ctx;
   const uid = ctx.uid || currentUser?.uid;
@@ -235,30 +517,36 @@ export async function mount(container, ctx = {}) {
   let followingNow = !!isFollowing;
   let followersCount = followers;
 
+  const hasPhoto = typeof user.photoURL === "string" && user.photoURL.startsWith("https://");
+
   container.innerHTML = `
     <div class="bg-slate-surface border-b border-slate-border px-5 pt-6 pb-5">
-      <div class="flex flex-col items-center text-center">
+      <div class="flex items-center gap-4 text-left">
         ${
           isMe
-            ? `<div class="relative">
+            ? `<div class="relative flex-shrink-0">
                  <button type="button" class="change-photo block rounded-full active:scale-95 transition-transform" aria-label="Change profile photo">${bigAvatar(user.photoURL)}</button>
-                 <span class="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-primary-container text-white ring-2 ring-slate-surface flex items-center justify-center pointer-events-none">
-                   <span class="material-symbols-outlined text-[18px]">photo_camera</span>
+                 <span class="absolute bottom-0 right-0 w-7 h-7 rounded-full bg-primary-container text-white ring-2 ring-slate-surface flex items-center justify-center pointer-events-none">
+                   <span class="material-symbols-outlined text-[16px]">photo_camera</span>
                  </span>
                  <div class="photo-loading absolute inset-0 rounded-full bg-black/50 text-white text-xs font-semibold flex items-center justify-center" hidden>Uploading...</div>
                  <input type="file" class="photo-input" accept="image/*" hidden />
                </div>`
-            : bigAvatar(user.photoURL)
+            : hasPhoto
+              ? `<button type="button" class="view-photo flex-shrink-0 block rounded-full active:scale-95 transition-transform" aria-label="View profile photo">${bigAvatar(user.photoURL)}</button>`
+              : `<div class="flex-shrink-0">${bigAvatar(user.photoURL)}</div>`
         }
-        <h2 class="font-headline-md text-headline-md text-on-surface font-semibold mt-3 break-words max-w-full">${escapeHtml(name)}</h2>
-        ${user.username ? `<p class="font-body-md text-body-md text-primary/80">@${escapeHtml(user.username)}</p>` : ""}
-        ${user.bio ? `<p class="font-body-md text-body-md text-on-surface-variant mt-2 whitespace-pre-wrap break-words max-w-sm">${escapeHtml(user.bio)}</p>` : ""}
+        <div class="min-w-0 flex-1">
+          <h2 class="font-headline-md text-headline-md text-on-surface font-semibold break-words">${escapeHtml(name)}</h2>
+          ${user.username ? `<p class="font-body-md text-body-md text-primary/80">@${escapeHtml(user.username)}</p>` : ""}
+          ${user.bio ? `<p class="font-body-md text-body-md text-on-surface-variant mt-2 whitespace-pre-wrap break-words">${escapeHtml(user.bio)}</p>` : ""}
+        </div>
       </div>
 
       <div class="flex items-center mt-5 py-3 border-y border-slate-border/70">
         ${stat("Posts", posts.length, "posts-count")}
-        ${stat("Followers", followersCount ?? "–", "followers-count")}
-        ${stat("Following", following ?? "–", "")}
+        ${blocked ? stat("Followers", followersCount ?? "–", "followers-count") : statButton("Followers", followersCount ?? "–", "followers-count", "followers")}
+        ${blocked ? stat("Following", following ?? "–", "following-count") : statButton("Following", following ?? "–", "following-count", "following")}
       </div>
 
       ${
@@ -294,16 +582,23 @@ export async function mount(container, ctx = {}) {
 
     <div class="px-3 sm:px-4 py-4 space-y-3 pb-10">
       ${
-        isMe
+        !blocked
           ? `<div class="flex gap-1 p-1 bg-surface-container rounded-xl">
                <button type="button" class="tab-btn flex-1 py-2 rounded-lg font-label-lg text-label-lg font-semibold transition-all" data-tab="posts">Posts</button>
-               <button type="button" class="tab-btn flex-1 py-2 rounded-lg font-label-lg text-label-lg font-semibold transition-all flex items-center justify-center gap-1.5" data-tab="saved">
-                 <span class="material-symbols-outlined text-[18px]">bookmark</span> Saved
+               <button type="button" class="tab-btn flex-1 py-2 rounded-lg font-label-lg text-label-lg font-semibold transition-all flex items-center justify-center gap-1.5" data-tab="photos">
+                 <span class="material-symbols-outlined text-[18px]">photo_library</span> Photos
                </button>
+               ${
+                 isMe
+                   ? `<button type="button" class="tab-btn flex-1 py-2 rounded-lg font-label-lg text-label-lg font-semibold transition-all flex items-center justify-center gap-1.5" data-tab="saved">
+                 <span class="material-symbols-outlined text-[18px]">bookmark</span> Saved
+               </button>`
+                   : ""
+               }
              </div>`
           : `<h3 class="font-label-lg text-label-lg text-on-surface px-1">Posts</h3>`
       }
-      <div class="tab-content space-y-4"></div>
+      <div class="tab-content -mx-3 sm:-mx-4 flex flex-col gap-2"></div>
     </div>
   `;
 
@@ -317,6 +612,7 @@ export async function mount(container, ctx = {}) {
     currentUserUid: currentUser?.uid,
     savedPostIds: ctx.savedPostIds,
     followingIds: ctx.followingIds,
+    isBlocked,
     showFollowChip: false // the profile already has its own Follow button
   };
 
@@ -334,6 +630,31 @@ export async function mount(container, ctx = {}) {
     showAds(tabContent, "profile");
   };
   renderPosts();
+
+  // Photos: every picture from this person's posts in a grid; tap one to see it big and swipe through the rest
+  const renderPhotos = () => {
+    tabContent.innerHTML = "";
+    const urls = [];
+    posts.forEach((post) => postImageUrls(post).forEach((url) => urls.push(url)));
+    if (!urls.length) {
+      tabContent.innerHTML = `<p class="text-center text-slate-muted font-body-md text-body-md py-10">${escapeHtml(isMe ? "You have" : handle + " has")} no photos yet.</p>`;
+      return;
+    }
+    const grid = document.createElement("div");
+    grid.className = "grid grid-cols-3 gap-0.5 px-3 sm:px-4";
+    grid.style.gridTemplateColumns = "repeat(3, minmax(0, 1fr))";
+    urls.forEach((url, index) => {
+      const tile = document.createElement("button");
+      tile.type = "button";
+      tile.className = "ph-tile relative block overflow-hidden bg-surface-container active:opacity-80";
+      tile.style.aspectRatio = "1 / 1";
+      tile.setAttribute("aria-label", `Photo ${index + 1} of ${urls.length}`);
+      tile.innerHTML = `<img src="${escapeHtml(url)}" alt="" loading="lazy" class="absolute inset-0 w-full h-full object-cover" onerror="this.remove()" />`;
+      tile.addEventListener("click", () => openImageViewer(urls, index));
+      grid.appendChild(tile);
+    });
+    tabContent.appendChild(grid);
+  };
 
   let firstSnapshot = true;
   const unsubscribePosts = onValue(
@@ -359,12 +680,13 @@ export async function mount(container, ctx = {}) {
       const countEl = container.querySelector(".posts-count");
       if (countEl) countEl.textContent = posts.length;
       if (activeTab === "posts") renderPosts();
+      else if (activeTab === "photos") renderPhotos();
     },
     (error) => console.warn("Could not watch posts:", error)
   );
 
-  // Posts / Saved tabs (own profile only)
-  if (isMe && tabButtons.length) {
+  // Posts / Photos tabs (and Saved on my own profile)
+  if (tabButtons.length) {
     const paintTabs = (active) => {
       tabButtons.forEach((btn) => {
         const on = btn.dataset.tab === active;
@@ -381,15 +703,35 @@ export async function mount(container, ctx = {}) {
         renderPosts();
         return;
       }
+      if (tab === "photos") {
+        renderPhotos();
+        return;
+      }
 
       tabContent.innerHTML = `<p class="text-center text-slate-muted font-body-md text-body-md py-10">Loading saved posts...</p>`;
       try {
         const saved = await loadSavedPosts(db, uid);
         // The user may have switched tabs while loading
         if (activeTab !== "saved") return;
-        tabContent.innerHTML = saved.length
-          ? saved.map((post) => postCardHtml(post, { showAuthor: true, showUnsave: true })).join("")
-          : SAVED_EMPTY_HTML;
+        if (!saved.length) {
+          tabContent.innerHTML = SAVED_EMPTY_HTML;
+          return;
+        }
+        // Same cards as the Feed; unsaving from the card's menu removes it from this list
+        tabContent.innerHTML = "";
+        const savedOptions = {
+          ...cardOptions,
+          showFollowChip: true,
+          onSave: async (post, wasSaved) => {
+            const ok = await cardOptions.onSave?.(post, wasSaved);
+            if (ok && wasSaved) {
+              tabContent.querySelector(`.save-btn[data-post-id="${post.id}"]`)?.closest("article")?.remove();
+              if (!tabContent.querySelector("article")) tabContent.innerHTML = SAVED_EMPTY_HTML;
+            }
+            return ok;
+          }
+        };
+        saved.forEach((post) => tabContent.appendChild(createPostCard(post, savedOptions)));
       } catch (error) {
         console.error(error);
         tabContent.innerHTML = `<p class="text-center text-slate-muted font-body-md text-body-md py-10">Could not load saved posts.</p>`;
@@ -427,7 +769,16 @@ export async function mount(container, ctx = {}) {
     const photoInput = container.querySelector(".photo-input");
     const loadingEl = container.querySelector(".photo-loading");
 
-    photoBtn.addEventListener("click", () => photoInput.click());
+    // My own photo: View (bigger) or Change. Without a photo yet, tapping goes straight to choosing one.
+    photoBtn.addEventListener("click", async () => {
+      if (!hasPhoto) return photoInput.click();
+      const choice = await openActionMenu([
+        { key: "view", label: "View photo", icon: "visibility" },
+        { key: "change", label: "Change photo", icon: "photo_camera" }
+      ]);
+      if (choice === "view") openImageViewer([user.photoURL], 0);
+      else if (choice === "change") photoInput.click();
+    });
 
     photoInput.addEventListener("change", async () => {
       const file = photoInput.files[0];
@@ -474,6 +825,10 @@ export async function mount(container, ctx = {}) {
     });
   }
 
+  // Someone else's photo: tap to see it bigger (swipe down or tap X to close; the menu can save it)
+  const viewPhotoBtn = container.querySelector(".view-photo");
+  if (viewPhotoBtn) viewPhotoBtn.addEventListener("click", () => openImageViewer([user.photoURL], 0));
+
   const unblockBtn = container.querySelector(".unblock-btn");
   if (unblockBtn) {
     unblockBtn.addEventListener("click", async () => {
@@ -500,7 +855,11 @@ export async function mount(container, ctx = {}) {
             blocked
               ? { key: "unblock", label: `Unblock ${handle}`, icon: "lock_open" }
               : { key: "block", label: `Block ${handle}`, icon: "block", danger: true },
-            { key: "share", label: "Share profile", icon: "share" }
+            isMuted(uid)
+              ? { key: "unmute", label: `Unmute ${handle}`, icon: "volume_up" }
+              : { key: "mute", label: `Mute ${handle}`, icon: "volume_off" },
+            { key: "share", label: "Share profile", icon: "share" },
+            { key: "report", label: `Report ${handle}`, icon: "flag", danger: true }
           ]);
 
           if (choice === "block") {
@@ -508,6 +867,14 @@ export async function mount(container, ctx = {}) {
             if (ok) mount(container, ctx);
           } else if (choice === "unblock") {
             if (await unblockAccount({ db, me: currentUser.uid, uid, name: handle })) mount(container, ctx);
+          } else if (choice === "mute") {
+            if (await muteAccount({ db, me: currentUser.uid, uid })) showToast(`${handle} muted. Their posts are hidden from your feed.`);
+            else showToast("Could not mute. Try again.");
+          } else if (choice === "unmute") {
+            if (await unmuteAccount({ db, me: currentUser.uid, uid })) showToast(`${handle} unmuted`);
+            else showToast("Could not unmute. Try again.");
+          } else if (choice === "report") {
+            reportProfile({ db, me: currentUser.uid, uid, name, username: user.username || "" });
           } else if (choice === "share") {
             shareProfile({ uid, name, username: user.username || "" });
           }
@@ -518,6 +885,34 @@ export async function mount(container, ctx = {}) {
 
   const shareBtn = container.querySelector(".share-profile");
   if (shareBtn) shareBtn.addEventListener("click", () => shareProfile({ uid, name, username: user.username || "" }));
+
+  // Followers / Following: the numbers open the list of people
+  container.querySelectorAll(".stat-btn").forEach((btn) =>
+    btn.addEventListener("click", () =>
+      openFollowList({
+        db,
+        // without an "open profile" handler (older callers) the list reopens this page for the chosen person
+        ctx: ctx.onOpenProfile ? ctx : { ...ctx, __remount: (target) => mount(container, { ...ctx, uid: target, isFollowing: !!(ctx.followingIds || {})[target] }) },
+        uid,
+        handle: handle,
+        isMe,
+        startTab: btn.dataset.list,
+        counts: { followers: followersCount, following },
+        onCounts: (next) => {
+          if (typeof next.followers === "number") {
+            followersCount = next.followers;
+            const el = container.querySelector(".followers-count");
+            if (el) el.textContent = next.followers;
+          }
+          if (typeof next.following === "number") {
+            following = next.following;
+            const el = container.querySelector(".following-count");
+            if (el) el.textContent = next.following;
+          }
+        }
+      })
+    )
+  );
 
   // Edit profile is a full page inside Settings (settings.js)
   const editBtn = container.querySelector(".edit-profile");
@@ -557,4 +952,30 @@ export async function mount(container, ctx = {}) {
     }
     paint();
   });
+}
+
+/* ---------------------------------------------------------------
+   Report a profile (goes to the admin panel, Reports > Profiles)
+---------------------------------------------------------------- */
+async function reportProfile({ db, me, uid, name, username }) {
+  const result = await openReportDialog({ title: "Report account", question: "Why are you reporting this account?" });
+  if (!result) return;
+  const reportRef = ref(db, `userReports/${uid}/${me}`);
+  try {
+    if ((await get(reportRef)).exists()) { showToast("You already reported this account"); return; }
+    await set(reportRef, {
+      targetUid: uid,
+      reporterUid: me,
+      reason: result.reason,
+      details: result.details || "",
+      name: (name || "").slice(0, 60),
+      username: (username || "").slice(0, 40),
+      status: "pending",
+      createdAt: serverTimestamp()
+    });
+    showToast("Report submitted. Thank you.");
+  } catch (error) {
+    console.error(error);
+    showToast(error.code === "PERMISSION_DENIED" ? "Could not report: database rules block it" : "Could not submit report. Try again.");
+  }
 }
