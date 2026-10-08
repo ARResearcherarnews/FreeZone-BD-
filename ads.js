@@ -54,10 +54,10 @@ function injectStyles() {
   style.id = "fz-ads-style";
   style.textContent = `
     .fz-ad-slot {
-      display: grid; grid-template-rows: 0fr; opacity: 0; margin-top: 0 !important;
+      display: grid; grid-template-rows: 0fr; opacity: 0; margin-top: -0.5rem !important; /* cancels the 8px gap while closed */
       transition: grid-template-rows .5s cubic-bezier(.2,.8,.2,1), opacity .4s ease .1s, margin-top .5s cubic-bezier(.2,.8,.2,1);
     }
-    .fz-ad-slot.fz-open { grid-template-rows: 1fr; opacity: 1; margin-top: 1rem !important; }
+    .fz-ad-slot.fz-open { grid-template-rows: 1fr; opacity: 1; margin-top: 0 !important; }
     .fz-ad-slot.fz-instant { transition: none; }
     .fz-ad-inner { min-height: 0; overflow: hidden; }
     @media (prefers-reduced-motion: reduce) { .fz-ad-slot { transition: none; } }
@@ -269,7 +269,7 @@ function buildAdCard(ad, imageSize) {
   `;
 
   const card = document.createElement("article");
-  card.className = "bg-slate-surface border border-slate-border rounded-2xl shadow-sm overflow-hidden";
+  card.className = "bg-slate-surface border-y border-slate-border overflow-hidden";
   card.dataset.adId = ad.id;
   card.innerHTML = `
     <div class="flex items-center justify-between gap-3 px-4 pt-4">
