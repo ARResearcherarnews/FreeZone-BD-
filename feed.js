@@ -1,5 +1,7 @@
 // FreeZone BD - Feed (Phase 2) - FIXED
 import { auth, db } from "./config.js";
+import { initTheme } from "./theme.js";
+initTheme();
 
 import {
   onAuthStateChanged
@@ -23,6 +25,8 @@ import {
 
 import { escapeHtml, timeAgo, avatarHtml, createPostCard, showToast, updateFollowButtons, sharePost, postImagesHtml, postImageUrls } from "./post.js";
 import { startBlocks, isBlocked, onBlocksChange, blockAccount } from "./block.js";
+import { startMutes, isMuted, onMutesChange } from "./mute.js";
+import { openCommentsSheet, mountComments } from "./comments.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -52,7 +56,7 @@ const pageModules = {
 };
 
 let unsubscribePostDetail = null;
-let unsubscribeDetailComments = null;
+let detailComments = null; // the comments list of the open post page (comments.js)
 let currentDetailPostId = null;
 
 let currentUser = null;
@@ -74,6 +78,14 @@ onAuthStateChanged(auth, async (user) => {
   currentProfile = profileSnap.exists()
     ? profileSnap.val()
     : { name: user.displayName || "FreeZone User", username: "", photoURL: "" };
+
+  // A suspended account can read but not post, comment or message (enforced by the database rules)
+  if (currentProfile.suspended === true) {
+    const bar = document.createElement("div");
+    bar.className = "bg-error-container text-on-error-container text-center text-[13px] font-semibold px-4 py-2";
+    bar.textContent = `Your account is suspended${currentProfile.suspendReason ? ": " + currentProfile.suspendReason : ""}. You can read, but you cannot post, comment or send messages.`;
+    document.body.insertBefore(bar, document.body.firstChild);
+  }
 
   navAvatar.innerHTML = currentProfile.photoURL
     ? `<img class="w-full h-full object-cover" src="${escapeHtml(currentProfile.photoURL)}" alt="avatar" />`
@@ -114,6 +126,7 @@ onAuthStateChanged(auth, async (user) => {
   }
 
   startBlocks({ db, currentUser }); // who I blocked (block.js), before any post is drawn
+  startMutes({ db, currentUser }); // who I muted (mute.js)
   listenPosts();
   watchUnreadMessages(user.uid);
 
@@ -121,6 +134,16 @@ onAuthStateChanged(auth, async (user) => {
   import("./chat.js")
     .then((module) => module.startPresence({ db, currentUser }))
     .catch((error) => console.warn("Online status is not available:", error));
+
+  // Incoming audio / video calls (call.js; rings only while the app is open)
+  import("./call.js")
+    .then((module) => module.startCallListener({ db, currentUser }))
+    .catch((error) => console.warn("Calls are not available:", error));
+
+  // Announcement banner and maintenance mode (status.js, controlled from the admin panel)
+  import("./status.js")
+    .then((module) => module.startAppStatus({ db, auth, currentUser }))
+    .catch((error) => console.warn("App status is not available:", error));
 
   // Notifications (the bell badge and writing notifications) live in notification.js
   import("./notification.js")
@@ -156,6 +179,7 @@ onAuthStateChanged(auth, async (user) => {
 function postActions() {
   return {
     onOpen: openPostDetail,
+    onComments: openComments,
     onLike: toggleLike,
     onShare: sharePost,
     onReport: reportPost,
@@ -163,7 +187,8 @@ function postActions() {
     onDelete: deletePost,
     onEdit: editPost,
     onSave: toggleSavePost,
-    onFollow: toggleFollow
+    onFollow: toggleFollow,
+    isBlocked
   };
 }
 
@@ -299,6 +324,8 @@ async function openUserProfile(uid, { backTo = null } = {}) {
       isFollowing: !!followingIds[uid],
       setActions: setPageActions,
       onToggleFollow: toggleFollow,
+      // people in this profile's Followers / Following list; Back returns to this profile
+      onOpenProfile: (otherUid) => openUserProfile(otherUid, { backTo: () => openUserProfile(uid, { backTo }) }),
       onOpenChat: (chatUid) => openChatWith(chatUid, { backTo: () => openUserProfile(uid, { backTo }) })
     });
   } catch (error) {
@@ -417,7 +444,7 @@ function listenPosts() {
     if (!latestPosts) return;
     postsContainer.innerHTML = "";
 
-    const visible = latestPosts.filter((post) => !isBlocked(post.uid));
+    const visible = latestPosts.filter((post) => !isBlocked(post.uid) && !isMuted(post.uid));
     if (emptyState) emptyState.hidden = visible.length > 0;
 
     visible.forEach((post) => {
@@ -430,12 +457,14 @@ function listenPosts() {
           onFollow: toggleFollow,
           onProfile: openUserProfile,
           onOpen: openPostDetail,
+          onComments: openComments,
           onLike: toggleLike,
           onShare: sharePost,
           onReport: reportPost,
           onBlock: blockPost,
           onDelete: deletePost,
-          onEdit: editPost
+          onEdit: editPost,
+          isBlocked
         })
       );
     });
@@ -443,6 +472,7 @@ function listenPosts() {
     showAds(postsContainer, "feed");
   };
   onBlocksChange(renderPosts);
+  onMutesChange(renderPosts);
 
   onValue(
     postsRef,
@@ -632,191 +662,73 @@ function closePostDetail() {
   postDetail.hidden = true;
   document.body.style.overflow = pageView && !pageView.hidden ? "hidden" : "";
   if (unsubscribePostDetail) unsubscribePostDetail();
-  if (unsubscribeDetailComments) unsubscribeDetailComments();
+  if (detailComments) detailComments.destroy();
   unsubscribePostDetail = null;
-  unsubscribeDetailComments = null;
+  detailComments = null;
   currentDetailPostId = null;
 }
 
 if (postDetailBack) postDetailBack.addEventListener("click", closePostDetail);
 
 function renderPostDetail(postId, post) {
-  const likedByMe = !!(post.likes && currentUser && post.likes[currentUser.uid]);
-  const likesCount = post.likesCount || 0;
-  const commentsCount = post.commentsCount || 0;
-
-  postDetailBody.innerHTML = `
-    <article class="bg-slate-surface border border-slate-border rounded-2xl p-4 shadow-sm space-y-3">
-      <div class="flex items-center gap-3 ${post.uid ? "cursor-pointer" : ""}" ${post.uid ? `data-profile-uid="${escapeHtml(post.uid)}"` : ""}>
-        ${avatarHtml(post.photoURL)}
-        <div>
-          <div class="font-headline-sm text-headline-sm text-on-surface font-semibold">${escapeHtml(post.name || "FreeZone User")}</div>
-          <div class="flex items-center gap-1.5 text-slate-muted font-body-sm text-body-sm">
-            ${post.username ? `<span>@${escapeHtml(post.username)}</span><span>•</span>` : ""}
-            <span>${timeAgo(post.createdAt)}</span>
-          </div>
-        </div>
-      </div>
-
-      <p class="font-body-md text-body-md text-on-surface leading-relaxed whitespace-pre-wrap break-words">${escapeHtml(post.text)}</p>
-
-      ${postImagesHtml(postImageUrls(post))}
-
-      <div class="flex items-center justify-between py-1 text-slate-muted font-body-sm text-body-sm border-b border-slate-border">
-        <span>${likesCount} like${likesCount === 1 ? "" : "s"}</span>
-        <span>${commentsCount} comment${commentsCount === 1 ? "" : "s"}</span>
-      </div>
-
-      <div class="flex items-center justify-between pt-0.5">
-        <button id="postDetailLikeBtn" class="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl font-label-md text-label-md font-semibold hover:bg-surface-container active:scale-95 transition-all ${likedByMe ? "text-primary-container liked" : "text-slate-muted"}">
-          <span class="material-symbols-outlined text-[20px] like-icon">thumb_up</span>
-          <span>${likedByMe ? "Liked" : "Like"}</span>
-        </button>
-        <span class="flex-1 flex items-center justify-center gap-1.5 py-2 text-slate-muted font-label-md text-label-md font-medium">
-          <span class="material-symbols-outlined text-[20px]">chat_bubble</span>
-          <span>Comment</span>
-        </span>
-        <button id="postDetailShareBtn" class="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-slate-muted hover:text-on-surface font-label-md text-label-md font-medium hover:bg-surface-container active:scale-95 transition-all">
-          <span class="material-symbols-outlined text-[20px]">share</span>
-          <span>Share</span>
-        </button>
-      </div>
-    </article>
-
-    <div id="postDetailComments" class="space-y-4 px-1 pb-4"></div>
-  `;
-
-  $("#postDetailLikeBtn").addEventListener("click", () => toggleLike(postId));
-  $("#postDetailShareBtn").addEventListener("click", () => sharePost({ ...post, id: postId }));
-
-  if (unsubscribeDetailComments) unsubscribeDetailComments();
-  unsubscribeDetailComments = listenComments(postId, $("#postDetailComments"));
-}
-
-if (postDetailCommentForm) {
-  postDetailCommentForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const text = postDetailCommentInput.value.trim();
-    if (!text || !currentUser || !currentDetailPostId) return;
-
-    postDetailCommentInput.disabled = true;
-    try {
-      const newCommentRef = push(ref(db, `posts/${currentDetailPostId}/comments`));
-      await set(newCommentRef, {
-        uid: currentUser.uid,
-        name: currentProfile.name || "FreeZone User",
-        username: currentProfile.username || "",
-        photoURL: currentProfile.photoURL || "",
-        text,
-        createdAt: serverTimestamp()
-      });
-      await update(ref(db, `posts/${currentDetailPostId}`), { commentsCount: increment(1) });
-      emitNotify({ type: "comment", postId: currentDetailPostId, commentId: newCommentRef.key, text });
-      postDetailCommentInput.value = "";
-    } catch (error) {
-      console.error(error);
-    } finally {
-      postDetailCommentInput.disabled = false;
-    }
-  });
-}
-
-const userInfoCache = {};
-async function getUserInfo(uid) {
-  if (!uid) return { photoURL: "", username: "" };
-  if (!userInfoCache[uid]) {
-    userInfoCache[uid] = (async () => {
-      try {
-        const [photoSnap, usernameSnap] = await Promise.all([
-          get(ref(db, `users/${uid}/photoURL`)),
-          get(ref(db, `users/${uid}/username`))
-        ]);
-        return {
-          photoURL: photoSnap.exists() ? photoSnap.val() : "",
-          username: usernameSnap.exists() ? usernameSnap.val() : ""
-        };
-      } catch (error) {
-        return { photoURL: "", username: "" };
+  // The same card as in the feed (new design); the full comment list is mounted below it
+  const keepScroll = postDetailBody.scrollTop;
+  postDetailBody.innerHTML = `<div id="postDetailCard" class="-mx-3 sm:-mx-4 -mt-4"></div><div id="postDetailComments" class="space-y-4 px-1 pb-4"></div>`;
+  $("#postDetailCard").appendChild(
+    createPostCard(
+      { ...post, id: postId },
+      {
+        ...postActions(),
+        currentUserUid: currentUser?.uid,
+        savedPostIds,
+        followingIds,
+        onSave: toggleSavePost,
+        onFollow: toggleFollow,
+        onProfile: openUserProfile,
+        onOpen: undefined,
+        onComments: () => postDetailCommentInput?.focus()
       }
-    })();
-  }
-  return userInfoCache[uid];
-}
+    )
+  );
+  postDetailBody.scrollTop = keepScroll;
 
-async function deleteComment(postId, commentId) {
-  if (!confirm("Delete this comment?")) return;
-  try {
-    await remove(ref(db, `posts/${postId}/comments/${commentId}`));
-    await update(ref(db, `posts/${postId}`), { commentsCount: increment(-1) });
-  } catch (error) {
-    console.error(error);
-    alert("Could not delete the comment. Please try again.");
+  // Comments (like, reply, delete) are handled by comments.js; keep the same list when only the post changed
+  if (detailComments && detailComments.postId === postId) {
+    detailComments.rebind($("#postDetailComments"));
+  } else {
+    if (detailComments) detailComments.destroy();
+    detailComments = mountComments({
+      db,
+      postId,
+      getMe,
+      listEl: $("#postDetailComments"),
+      formEl: postDetailCommentForm,
+      inputEl: postDetailCommentInput,
+      isBlocked // profile taps are handled by the page (data-profile-uid)
+    });
   }
 }
 
-function listenComments(postId, container) {
-  const commentsRef = ref(db, `posts/${postId}/comments`);
+// Who is writing (read when a comment is sent, so a changed name or photo is used)
+function getMe() {
+  if (!currentUser) return {};
+  const profile = currentProfile || {};
+  return {
+    uid: currentUser.uid,
+    name: profile.name || "FreeZone User",
+    username: profile.username || "",
+    photoURL: profile.photoURL || ""
+  };
+}
 
-  return onValue(commentsRef, (snapshot) => {
-    container.innerHTML = "";
-
-    if (!snapshot.exists()) {
-      container.innerHTML = `
-        <div class="text-center py-8">
-          <span class="material-symbols-outlined text-[36px] text-slate-subtle">chat_bubble</span>
-          <p class="text-slate-muted font-body-md text-body-md mt-1">No comments yet</p>
-          <p class="text-slate-subtle font-body-sm text-body-sm">Be the first to comment.</p>
-        </div>`;
-      return;
-    }
-
-    const comments = [];
-    snapshot.forEach((child) => {
-      comments.push({ id: child.key, ...child.val() });
-    });
-    comments.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-    comments.splice(0, comments.length, ...comments.filter((comment) => !isBlocked(comment.uid)));
-
-    const heading = document.createElement("h3");
-    heading.className = "font-label-lg text-label-lg text-on-surface px-1 pb-1";
-    heading.textContent = `Comments (${comments.length})`;
-    container.appendChild(heading);
-
-    comments.forEach((comment) => {
-      const isMine = !!(currentUser && comment.uid === currentUser.uid);
-      const row = document.createElement("div");
-      row.className = "flex items-start gap-2.5";
-      row.innerHTML = `
-        <div class="comment-avatar flex-shrink-0 ${comment.uid ? "cursor-pointer" : ""}" ${comment.uid ? `data-profile-uid="${escapeHtml(comment.uid)}"` : ""}>${avatarHtml(comment.photoURL || "", "w-9 h-9")}</div>
-        <div class="min-w-0 flex-1">
-          <div class="inline-block max-w-full bg-surface-container-low rounded-2xl rounded-tl-md px-3.5 py-2.5">
-            <div class="comment-author font-label-lg text-label-lg text-on-surface truncate ${comment.uid ? "cursor-pointer" : ""}" ${comment.uid ? `data-profile-uid="${escapeHtml(comment.uid)}"` : ""}>${escapeHtml(comment.username ? `@${comment.username}` : comment.name || "FreeZone User")}</div>
-            <p class="font-body-md text-body-md text-on-surface leading-relaxed whitespace-pre-wrap break-words mt-0.5">${escapeHtml(comment.text)}</p>
-          </div>
-          <div class="flex items-center gap-3 px-2 mt-1 font-body-sm text-body-sm text-slate-subtle">
-            <span>${timeAgo(comment.createdAt)}</span>
-            ${isMine ? `<button type="button" class="delete-comment font-medium text-slate-muted hover:text-error transition-colors">Delete</button>` : ""}
-          </div>
-        </div>
-      `;
-
-      if (isMine) {
-        row.querySelector(".delete-comment").addEventListener("click", () => deleteComment(postId, comment.id));
-      }
-
-      // Older comments may have no saved photo or username: look them up from the user's profile
-      if (comment.uid && (!comment.photoURL || !comment.username)) {
-        getUserInfo(comment.uid).then(({ photoURL, username }) => {
-          if (!comment.photoURL && photoURL) {
-            row.querySelector(".comment-avatar").innerHTML = avatarHtml(photoURL, "w-9 h-9");
-          }
-          if (!comment.username && username) {
-            row.querySelector(".comment-author").textContent = `@${username}`;
-          }
-        });
-      }
-
-      container.appendChild(row);
-    });
+// The Comment button of a post: the comments open in a sheet that slides up (comments.js)
+function openComments(postId) {
+  if (!currentUser) return;
+  openCommentsSheet({
+    db,
+    postId,
+    getMe,
+    isBlocked,
+    onProfile: (uid) => openUserProfile(uid)
   });
 }
