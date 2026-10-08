@@ -7,6 +7,12 @@
 //   edit-profile     photo, name (once every 60 days), bio. The username can never be changed.
 //   change-password  current password + new password
 //   delete-account   permanently deletes the account and its data
+//   help             Help center / FAQ                      (help.js)
+//   report-problem   Report a problem -> feedback/{uid}/{id} (feedback.js)
+//   about            version, contact, legal links           (about.js)
+//   appearance       Light / Dark / System theme (theme.js, colours in theme.css; saved on this device)
+// Terms / Privacy / Community guidelines open terms.html, privacy.html, guidelines.html.
+// Invite friends shares the app link. App name, version and support email live in app-info.js.
 //
 // Data (Firebase Realtime Database):
 //   users/{uid}/name, nameLower, bio, photoURL
@@ -37,9 +43,11 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-database.js";
 
 import { uploadToImgbb } from "./imgbb.js";
-import { escapeHtml, avatarHtml, showToast } from "./post.js";
+import { escapeHtml, avatarHtml, showToast, copyLink } from "./post.js";
 import { onBlocksChange, getBlockedIds, openBlockedAccounts } from "./block.js";
 import { cropToSquareBlob, syncAuthorFields } from "./profile.js";
+import { APP_NAME, getInviteLink } from "./app-info.js";
+import { getThemeMode, setThemeMode, isDark } from "./theme.js";
 
 const NAME_MIN = 2;
 const NAME_MAX = 40;
@@ -175,6 +183,22 @@ const hasPasswordLogin = (user) => !!user && !!user.email && user.providerData.s
 const switchClass = (on) =>
   `st-switch relative flex-shrink-0 w-12 h-7 rounded-full transition-colors disabled:opacity-60 ${on ? "bg-online-emerald" : "bg-slate-border"}`;
 
+// Invite friends: the phone's share sheet when there is one, otherwise the link is copied
+async function inviteFriends() {
+  const link = getInviteLink();
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: APP_NAME, text: `Join me on ${APP_NAME}: connect, share and chat with friends.`, url: link });
+      return;
+    } catch (error) {
+      if (error && error.name === "AbortError") return; // the person closed the share sheet
+    }
+  }
+  await copyLink(link);
+}
+
+const openPage = (url) => window.open(url, "_blank", "noopener");
+
 function buildSections({ ctx, state, go }) {
   return [
     {
@@ -197,6 +221,23 @@ function buildSections({ ctx, state, go }) {
           label: "Change password",
           note: () => "Keep your account safe with a strong password",
           onClick: () => go("change-password")
+        }
+      ]
+    },
+    {
+      title: "Appearance",
+      rows: [
+        {
+          id: "appearance",
+          type: "link",
+          icon: "dark_mode",
+          iconClass: "bg-primary-container/10 text-primary-container",
+          label: "Dark mode",
+          note: () => {
+            const mode = getThemeMode();
+            return mode === "system" ? "Following your phone's setting" : mode === "dark" ? "On" : "Off";
+          },
+          onClick: () => go("appearance")
         }
       ]
     },
@@ -230,6 +271,79 @@ function buildSections({ ctx, state, go }) {
             return count ? `${count} blocked` : "No blocked accounts";
           },
           onClick: () => openBlockedAccounts({ db: ctx.db, me: ctx.currentUser.uid })
+        }
+      ]
+    },
+    {
+      title: "Help and support",
+      rows: [
+        {
+          id: "help",
+          type: "link",
+          icon: "help",
+          iconClass: "bg-primary-container/10 text-primary-container",
+          label: "Help center",
+          note: () => "Answers to common questions (FAQ)",
+          onClick: () => go("help")
+        },
+        {
+          id: "report-problem",
+          type: "link",
+          icon: "flag",
+          iconClass: "bg-primary-container/10 text-primary-container",
+          label: "Report a problem",
+          note: () => "Tell us about a bug or send a suggestion",
+          onClick: () => go("report-problem")
+        },
+        {
+          id: "invite",
+          type: "link",
+          icon: "person_add",
+          iconClass: "bg-online-emerald/15 text-online-emerald",
+          label: "Invite friends",
+          note: () => `Share the link to ${APP_NAME}`,
+          onClick: inviteFriends
+        }
+      ]
+    },
+    {
+      title: "About and legal",
+      rows: [
+        {
+          id: "about",
+          type: "link",
+          icon: "info",
+          iconClass: "bg-surface-container text-on-surface-variant",
+          label: `About ${APP_NAME}`,
+          note: () => "Version and contact",
+          onClick: () => go("about")
+        },
+        {
+          id: "terms",
+          type: "link",
+          icon: "description",
+          iconClass: "bg-surface-container text-on-surface-variant",
+          label: "Terms of Service",
+          note: () => "The rules for using the app",
+          onClick: () => openPage("terms.html")
+        },
+        {
+          id: "privacy",
+          type: "link",
+          icon: "privacy_tip",
+          iconClass: "bg-surface-container text-on-surface-variant",
+          label: "Privacy Policy",
+          note: () => "What we keep and how it is used",
+          onClick: () => openPage("privacy.html")
+        },
+        {
+          id: "guidelines",
+          type: "link",
+          icon: "diversity_3",
+          iconClass: "bg-surface-container text-on-surface-variant",
+          label: "Community guidelines",
+          note: () => "How to keep the community safe and friendly",
+          onClick: () => openPage("guidelines.html")
         }
       ]
     },
@@ -990,14 +1104,124 @@ function renderDeleteAccount(root, ctx) {
 }
 
 /* ---------------------------------------------------------------
+   Page: Appearance (Dark mode)
+---------------------------------------------------------------- */
+const THEME_CHOICES = [
+  {
+    mode: "light",
+    icon: "light_mode",
+    label: "Light",
+    note: "Bright background. Best in daylight.",
+    preview: { bg: "#f7f9fb", card: "#ffffff", line: "#e2e8f0", text: "#191c1e", muted: "#94a3b8" }
+  },
+  {
+    mode: "dark",
+    icon: "dark_mode",
+    label: "Dark",
+    note: "Dark background. Easier on the eyes at night and can save battery on OLED screens.",
+    preview: { bg: "#0f172a", card: "#1e293b", line: "#334155", text: "#e2e8f0", muted: "#64748b" }
+  },
+  {
+    mode: "system",
+    icon: "brightness_auto",
+    label: "System default",
+    note: "Switches between light and dark together with your phone's setting.",
+    preview: null
+  }
+];
+
+function themePreviewHtml(preview) {
+  const mini = (p) => `
+    <div class="flex-1 p-2" style="background:${p.bg}">
+      <div class="rounded-md p-1.5" style="background:${p.card};border:1px solid ${p.line}">
+        <div class="flex items-center gap-1">
+          <span class="w-3 h-3 rounded-full" style="background:#2563eb"></span>
+          <span class="h-1.5 w-8 rounded" style="background:${p.text}"></span>
+        </div>
+        <div class="h-1 w-full rounded mt-1.5" style="background:${p.muted}"></div>
+        <div class="h-1 w-2/3 rounded mt-1" style="background:${p.muted}"></div>
+      </div>
+    </div>`;
+  const light = THEME_CHOICES[0].preview;
+  const dark = THEME_CHOICES[1].preview;
+  return `<div class="flex w-24 h-16 rounded-xl overflow-hidden border border-slate-border flex-shrink-0">${preview ? mini(preview) : mini(light) + mini(dark)}</div>`;
+}
+
+function renderAppearance(root, ctx) {
+  const { ui } = ctx;
+
+  root.innerHTML = `
+    <div class="max-w-lg mx-auto pb-12">
+      ${ui.introHtml({
+        icon: "dark_mode",
+        iconClass: "bg-primary-container/10 text-primary-container",
+        title: "Dark mode",
+        text: "Choose how FreeZone BD looks. The change happens at once, everywhere in the app."
+      })}
+
+      <div class="ap-list px-4 mt-4 space-y-3" role="radiogroup" aria-label="Theme"></div>
+
+      <div class="px-4 mt-5">
+        ${ui.infoBox({
+          icon: "smartphone",
+          html: "This choice is saved <b>on this device</b>. If you use FreeZone BD on another phone or browser, choose your theme there too."
+        })}
+      </div>
+    </div>`;
+
+  const listEl = root.querySelector(".ap-list");
+  const paint = () => {
+    const current = getThemeMode();
+    listEl.innerHTML = THEME_CHOICES.map((choice) => {
+      const on = choice.mode === current;
+      return `
+        <button type="button" role="radio" aria-checked="${on}" data-mode="${choice.mode}"
+          class="ap-choice w-full flex items-center gap-4 p-3.5 rounded-2xl border-2 text-left transition-colors ${
+            on ? "border-primary-container bg-primary-container/5" : "border-slate-border bg-slate-surface hover:bg-surface-container-low"
+          }">
+          ${themePreviewHtml(choice.preview)}
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 font-label-lg text-label-lg text-on-surface">
+              <span class="material-symbols-outlined text-[20px]">${choice.icon}</span>${escapeHtml(choice.label)}
+            </div>
+            <p class="font-body-sm text-body-sm text-slate-muted mt-0.5">${escapeHtml(choice.note)}${
+              choice.mode === "system" && on ? ` Now it is <b>${isDark() ? "dark" : "light"}</b>.` : ""
+            }</p>
+          </div>
+          <span class="material-symbols-outlined flex-shrink-0 ${on ? "text-primary-container" : "text-slate-subtle"}" style="font-variation-settings:'FILL' ${on ? 1 : 0};">${
+            on ? "radio_button_checked" : "radio_button_unchecked"
+          }</span>
+        </button>`;
+    }).join("");
+  };
+  paint();
+
+  listEl.addEventListener("click", (event) => {
+    const button = event.target.closest(".ap-choice");
+    if (!button) return;
+    setThemeMode(button.dataset.mode);
+    paint();
+    showToast(button.dataset.mode === "system" ? "Following your phone's setting" : button.dataset.mode === "dark" ? "Dark mode is on" : "Light mode is on");
+  });
+}
+
+/* ---------------------------------------------------------------
    Pages and navigation
 ---------------------------------------------------------------- */
 const PAGES = {
   main: { title: "Settings", render: renderMain },
   "edit-profile": { title: "Edit profile", render: (root, ctx) => renderEditProfile(root, ctx) },
   "change-password": { title: "Change password", render: (root, ctx) => renderChangePassword(root, ctx) },
-  "delete-account": { title: "Delete account", render: (root, ctx) => renderDeleteAccount(root, ctx) }
+  "delete-account": { title: "Delete account", render: (root, ctx) => renderDeleteAccount(root, ctx) },
+  appearance: { title: "Dark mode", render: (root, ctx) => renderAppearance(root, ctx) },
+  // These three live in their own files and are loaded only when opened
+  help: { title: "Help center", render: async (root, ctx) => (await import("./help.js")).render(root, ctx) },
+  "report-problem": { title: "Report a problem", render: async (root, ctx) => (await import("./feedback.js")).render(root, ctx) },
+  about: { title: `About ${APP_NAME}`, render: async (root, ctx) => (await import("./about.js")).render(root, ctx) }
 };
+
+// Look-and-feel helpers shared with help.js / feedback.js / about.js
+const UI = { introHtml, infoBox, confirmDialog, INPUT, LABEL, HINT, BTN_PRIMARY, BTN_DANGER };
 
 export async function mount(container, ctx = {}) {
   if (!ctx.currentUser) {
@@ -1022,7 +1246,14 @@ export async function mount(container, ctx = {}) {
     container.scrollTop = 0;
     container.parentElement && (container.parentElement.scrollTop = 0);
 
-    const result = await page.render(container, { ...ctx, goMain: () => go("main") }, { go });
+    let result;
+    try {
+      result = await page.render(container, { ...ctx, ui: UI, go, goMain: () => go("main") }, { go });
+    } catch (error) {
+      console.error("Settings page:", error);
+      container.innerHTML = `<p class="text-center text-slate-muted font-body-md text-body-md py-16">Could not load this page. Check that all files are uploaded and try again.</p>`;
+      return;
+    }
     if (mine === token && typeof result === "function") stopMain = result;
     else if (typeof result === "function") result();
   };
