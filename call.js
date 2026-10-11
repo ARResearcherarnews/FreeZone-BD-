@@ -97,7 +97,7 @@ function callScreen({ name, photoURL, video }) {
       <div class="cl-timer text-[13px] text-white/80 drop-shadow"></div>
     </div>
     <video class="cl-local absolute right-3 w-28 h-40 rounded-xl object-cover bg-black/40 shadow-lg ${video ? "" : "hidden"}" style="top:max(4rem, calc(env(safe-area-inset-top) + 3rem)); transform:scaleX(-1);" autoplay playsinline muted></video>
-    <div class="cl-controls relative flex items-center justify-center gap-4 pt-4" style="padding-bottom:max(1.5rem, env(safe-area-inset-bottom));">
+    <div class="cl-controls relative mt-auto flex items-center justify-center gap-4 pt-4" style="padding-bottom:max(1.5rem, env(safe-area-inset-bottom));">
       <button type="button" class="cl-mute w-14 h-14 rounded-full bg-white/15 flex items-center justify-center active:scale-95" aria-label="Mute"><span class="material-symbols-outlined">mic</span></button>
       ${video ? `<button type="button" class="cl-cam w-14 h-14 rounded-full bg-white/15 flex items-center justify-center active:scale-95" aria-label="Camera"><span class="material-symbols-outlined">videocam</span></button>
       <button type="button" class="cl-flip w-14 h-14 rounded-full bg-white/15 flex items-center justify-center active:scale-95" aria-label="Switch camera"><span class="material-symbols-outlined">cameraswitch</span></button>` : ""}
